@@ -1,5 +1,5 @@
 """
-This is a script for creating various files frrom templates. This is to ease the process for users who want to extend LIBERO, creating new tasks. You would still need to make necessary changes based on the template to serve your own need, but the hope is that we save you much time by providing the necessar templates.
+This is a script for creating various files from templates. This is to ease the process for users who want to extend LIBERO, creating new tasks. You would still need to make necessary changes based on the template to serve your own need, but the hope is that we save you much time by providing the necessary templates.
 """
 
 import os
