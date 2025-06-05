@@ -2,6 +2,7 @@ import os
 import numpy as np
 import robosuite as suite
 import matplotlib.cm as cm
+import cv2
 
 from robosuite.utils.errors import RandomizationError
 
@@ -191,7 +192,8 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
         self.segmentation_id_mapping = {}
 
         for i, instance_name in enumerate(list(self.env.model.instances_to_ids.keys())):
-            if instance_name == "Panda0":
+            # Add "OnTheGroundPanda0" to the instance name
+            if instance_name == "Panda0" or instance_name == "OnTheGroundPanda0":
                 self.segmentation_robot_id = i
 
         for i, instance_name in enumerate(list(self.env.model.instances_to_ids.keys())):
@@ -256,7 +258,7 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
             )
             print(seg_img.shape)
             cv2.imshow("Seg Image", seg_img[::-1])
-            cv2.waitKey(1)
+            cv2.waitKey(0)
             # use @inds to map each geom ID to a color
             return seg_img
 
