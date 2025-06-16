@@ -23,7 +23,7 @@ class GenerateInitStates:
     configurations.
     """
 
-    def __init__(self, num_init: int, task_id: int, save_dir: str):
+    def __init__(self, num_init: int, task_id: int, save_dir: str, benchmark_name: str = None):
         """
         Initialize the state generator.
         
@@ -31,23 +31,106 @@ class GenerateInitStates:
             num_init: Number of initial states to generate
             task_id: ID of the task to generate states for
             save_dir: Directory to save the generated states
+            benchmark_name: Name of the benchmark to use (if None, will prompt user)
         """
         self.num_init = num_init
         self.task_id = task_id
         self.save_dir = save_dir
+        self.benchmark_name = benchmark_name
 
+    def _get_benchmark_name(self) -> str:
+        """
+        Get benchmark name from user input if not provided.
+        
+        Returns:
+            str: The benchmark name to use
+        """
+        if self.benchmark_name is not None:
+            return self.benchmark_name
+            
+        # Get available benchmarks
+        benchmark_dict = benchmark.get_benchmark_dict()
+        available_benchmarks = list(benchmark_dict.keys())
+        
+        print("\nAvailable benchmarks:")
+        for i, bench_name in enumerate(available_benchmarks):
+            print(f"  {i}: {bench_name}")
+        
+        print(f"\nDefault benchmarks: {available_benchmarks}")
+        
+        while True:
+            user_input = input("Please enter the benchmark name (or press Enter for 'libero_object_single'): ").strip()
+            
+            # Use default if empty
+            if not user_input:
+                return "libero_object_single"
+            
+            # Check if input is valid
+            if user_input in available_benchmarks:
+                return user_input
+            else:
+                print(f"Invalid benchmark name. Available options: {available_benchmarks}")
+                continue
+
+    def _confirm_task_selection(self, task, benchmark_name: str) -> bool:
+        """
+        Display task information and ask for user confirmation.
+        
+        Args:
+            task: The task object
+            benchmark_name: Name of the benchmark being used
+            
+        Returns:
+            bool: True if user confirms, False otherwise
+        """
+        print(f"\n{'='*50}")
+        print(f"TASK CONFIRMATION")
+        print(f"{'='*50}")
+        print(f"Benchmark: {benchmark_name}")
+        print(f"Task ID: {self.task_id}")
+        print(f"Task Name: {task.name}")
+        if hasattr(task, 'description'):
+            print(f"Description: {task.description}")
+        print(f"Number of initial states to generate: {self.num_init}")
+        print(f"{'='*50}")
+        
+        while True:
+            user_input = input("Do you want to proceed with this task? (y/n): ").strip().lower()
+            if user_input in ['y', 'yes']:
+                return True
+            elif user_input in ['n', 'no']:
+                print("Task selection cancelled.")
+                return False
+            else:
+                print("Please enter 'y' (yes) or 'n' (no)")
+                continue
     def _get_task_and_env_config(self):
         """
         Get task configuration and environment arguments.
         
         Returns:
-            tuple: (task, env_args) containing task object and environment config
+            tuple: (task, env_args, benchmark_name) containing task object, 
+                   environment config, and benchmark name, or (None, None, None) if user cancels
         """
+        # Get benchmark name from user input
+        benchmark_name = self._get_benchmark_name()
+        
         # Get benchmark instance
         benchmark_dict = benchmark.get_benchmark_dict()
-        benchmark_instance = benchmark_dict["libero_object_single"]()
+        benchmark_instance = benchmark_dict[benchmark_name]()
         bddl_files_default_path = get_libero_path("bddl_files")
-        task = benchmark_instance.get_task(self.task_id)
+        
+        try:
+            task = benchmark_instance.get_task(self.task_id)
+        except (IndexError, KeyError) as e:
+            print(f"Error: Invalid task ID {self.task_id} for benchmark '{benchmark_name}'")
+            print(f"Please check the available task IDs for this benchmark.")
+            return None, None, None
+        
+        # Ask for user confirmation
+        if not self._confirm_task_selection(task, benchmark_name):
+            return None, None, None
+            
         bddl_file = os.path.join(bddl_files_default_path, task.problem_folder, task.bddl_file)
         print(f"BDDL file: {bddl_file}")
 
@@ -57,7 +140,7 @@ class GenerateInitStates:
             "camera_widths": 128
         }
         
-        return task, env_args
+        return task, env_args, benchmark_name
 
     def _collect_initial_states(self, env_args: dict) -> np.ndarray:
         """
@@ -124,19 +207,20 @@ class GenerateInitStates:
                 print("Please enter 'y' (yes) or 'n' (no)")
                 continue
 
-    def _save_states_to_file(self, all_init_states: np.ndarray, task_name: str) -> str:
+    def _save_states_to_file(self, all_init_states: np.ndarray, task_name: str, benchmark_name: str) -> str:
         """
         Save states to file with user confirmation for overwrite.
         
         Args:
             all_init_states: Array of initial states to save
             task_name: Name of the task for filename
+            benchmark_name: Name of the benchmark for directory structure
             
         Returns:
             str: Path where the file was saved, or None if cancelled
         """
-        # Create save directory
-        save_dir = os.path.join(self.save_dir, "libero_object_single")
+        # Create save directory using the benchmark name
+        save_dir = os.path.join(self.save_dir, benchmark_name)
         os.makedirs(save_dir, exist_ok=True)
 
         # Save all states to file
@@ -177,13 +261,18 @@ class GenerateInitStates:
         and saving initial states for the task.
         """
         # Get task and environment configuration
-        task, env_args = self._get_task_and_env_config()
+        task, env_args, benchmark_name = self._get_task_and_env_config()
+        
+        # Check if user cancelled task selection
+        if task is None or env_args is None or benchmark_name is None:
+            print("Initial state generation cancelled.")
+            return
         
         # Collect initial states from environment
         all_init_states = self._collect_initial_states(env_args)
         
         # Save states to file
-        save_path = self._save_states_to_file(all_init_states, task.name)
+        save_path = self._save_states_to_file(all_init_states, task.name, benchmark_name)
         
         # Print statistics if file was saved successfully
         if save_path is not None:
@@ -211,6 +300,12 @@ def main():
         help='Task ID to generate initial states for.'
     )
     parser.add_argument(
+        '--benchmark', 
+        type=str, 
+        default=None,
+        help='Benchmark name to use (if not provided, will prompt user for input).'
+    )
+    parser.add_argument(
         '--save_dir', 
         type=str, 
         default='libero/libero/init_files/',
@@ -223,7 +318,8 @@ def main():
     generator = GenerateInitStates(
         num_init=args.num_init, 
         task_id=args.task_id, 
-        save_dir=args.save_dir
+        save_dir=args.save_dir,
+        benchmark_name=args.benchmark
     )
 
     # Generate initial states
