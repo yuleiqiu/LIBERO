@@ -3,56 +3,260 @@
 """
 replay_and_save_hdf5.py
 -----------------------
-回放LIBERO演示并保存为与collect_demonstration.py相同格式的hdf5文件
+Replay LIBERO demonstrations and save them in the same format as collect_demonstration.py
 """
-import os
+import argparse
 import copy
+import datetime
 import h5py
 import json
-import datetime
+import os
+import sys
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
 import robosuite as suite
 from robosuite import load_controller_config
+
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs.env_wrapper import OffScreenRenderEnv
 
 
-# ---------- 配置 ----------
-task_suite_name = "libero_object"
-task_id         = 0                           # alphabet soup 任务
-max_demos       = 50                          # 遍历数
-output_dir      = os.path.join("replay", "hdf5_output")
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Replay LIBERO demonstrations and save as HDF5")
+    parser.add_argument(
+        "--task-id", 
+        type=int, 
+        default=0,
+        help="Task ID to replay (default: 0)"
+    )
+    parser.add_argument(
+        "--task-suite-multiple",
+        type=str,
+        default="libero_object",
+        help="Multiple task suite name (default: libero_object)"
+    )
+    parser.add_argument(
+        "--task-suite-single",
+        type=str,
+        default="libero_object_single",
+        help="Single task suite name (default: libero_object_single)"
+    )
+    parser.add_argument(
+        "--max-demos",
+        type=int,
+        default=50,
+        help="Maximum number of demonstrations to process (default: 50)"
+    )
+    parser.add_argument(
+        "--camera-height",
+        type=int,
+        default=128,
+        help="Camera height (default: 128)"
+    )
+    parser.add_argument(
+        "--camera-width",
+        type=int,
+        default=128,
+        help="Camera width (default: 128)"
+    )
+    return parser.parse_args()
 
-os.makedirs(output_dir, exist_ok=True)
 
-# ---------- 路径 ----------
-benchmark_dict  = benchmark.get_benchmark_dict()
-task_suite      = benchmark_dict[task_suite_name]()
-task            = task_suite.get_task(task_id)
+def main():
+    """Main function to run the replay process."""
+    args = parse_args()
+    
+    # Configuration constants
+    TASK_SUITE_NAME_MULTIPLE = args.task_suite_multiple
+    TASK_SUITE_NAME_SINGLE = args.task_suite_single
+    TASK_ID = args.task_id
+    MAX_DEMOS = args.max_demos
+    CAMERA_HEIGHT = args.camera_height
+    CAMERA_WIDTH = args.camera_width
 
-bddl_dir        = get_libero_path("bddl_files")
-bddl_full       = os.path.join(bddl_dir, task.problem_folder, task.bddl_file)
+    # Initialize benchmark and task objects
+    try:
+        benchmark_dict = benchmark.get_benchmark_dict()
+        task_suite_multiple = benchmark_dict[TASK_SUITE_NAME_MULTIPLE]()
+        task_multiple = task_suite_multiple.get_task(TASK_ID)
 
-current_dir     = os.path.dirname(os.path.abspath(__file__))
-parent_dir      = os.path.dirname(current_dir)
-tmp_bddl_dir    = os.path.join(parent_dir, "tmp", "pddl_files")
-bddl_simplified = os.path.join(tmp_bddl_dir,
-                               "MY_FLOOR_SCENE_pick_the_alphabet_soup_and_place_it_in_the_basket_2.bddl")
+        task_suite_single = benchmark_dict[TASK_SUITE_NAME_SINGLE]()
+        task_single = task_suite_single.get_task(TASK_ID)
+    except KeyError as e:
+        print(f"[ERROR] Task suite not found: {e}")
+        sys.exit(1)
+    except IndexError as e:
+        print(f"[ERROR] Task ID {TASK_ID} not found in task suite")
+        sys.exit(1)
 
-demo_dir        = get_libero_path("datasets")
-demo_file       = os.path.join(demo_dir, task_suite.get_task_demonstration(task_id))
-demo_h5         = h5py.File(demo_file, "r")["data"]
+    # Set up file paths
+    bddl_dir = get_libero_path("bddl_files")
+    bddl_multiple = os.path.join(bddl_dir, task_multiple.problem_folder, task_multiple.bddl_file)
+    bddl_single = os.path.join(bddl_dir, task_single.problem_folder, task_single.bddl_file)
 
-# ---------- 创建环境 ----------
-cam_args        = dict(camera_heights=128, camera_widths=128)
-env_full        = OffScreenRenderEnv(bddl_file_name=bddl_full,       **cam_args)
-env_simple      = OffScreenRenderEnv(bddl_file_name=bddl_simplified, **cam_args)
+    output_dir = os.path.join("replay", "hdf5_output")
+    os.makedirs(output_dir, exist_ok=True)
 
-# ---------- 工具：复制重叠状态 ----------
-def joint_sizes(jt):
-    return {0:(7,6), 1:(4,3), 2:(1,1), 3:(1,1)}[jt]
+    demo_dir = get_libero_path("datasets")
+    demo_file = os.path.join(demo_dir, task_suite_multiple.get_task_demonstration(TASK_ID))
+    
+    # Check if demo file exists
+    if not os.path.exists(demo_file):
+        print(f"[ERROR] Demo file not found: {demo_file}")
+        sys.exit(1)
+        
+    demo_h5 = h5py.File(demo_file, "r")["data"]
 
-def copy_overlap(src_env, dst_env):
+    # Create environments
+    cam_args = dict(camera_heights=CAMERA_HEIGHT, camera_widths=CAMERA_WIDTH)
+    env_multiple = OffScreenRenderEnv(bddl_file_name=bddl_multiple, **cam_args)
+    env_single = OffScreenRenderEnv(bddl_file_name=bddl_single, **cam_args)
+
+    print(f"[INFO] Using single task suite: {TASK_SUITE_NAME_SINGLE}, "
+          f"task ID: {TASK_ID}, task name: {task_single.name}")
+    
+    # Prepare environment information
+    # Simulate config information from collect_demonstration.py
+    controller_config = load_controller_config(default_controller="OSC_POSE")
+    config = {
+        "robots": ["Panda"],  # Adjust according to actual robot
+        "controller_configs": controller_config,  # Adjust according to actual controller
+    }
+    env_info = json.dumps(config)
+
+    # Get problem information (requires importing BDDLUtils)
+    try:
+        import libero.libero.envs.bddl_utils as BDDLUtils
+        problem_info = BDDLUtils.get_problem_info(bddl_single)
+    except Exception as e:
+        raise RuntimeError(f"Failed to retrieve problem information from {bddl_single}: {str(e)}")
+
+    # Collect replay data
+    collected_demos = []
+    success_cnt = 0
+
+    for demo_idx in range(MAX_DEMOS):
+        demo_key = f"demo_{demo_idx}"
+        if demo_key not in demo_h5:
+            print(f"[!] Dataset does not contain {demo_key}, ending early")
+            break
+
+        demo = demo_h5[demo_key]
+        states = demo["states"]
+        actions = demo["actions"]
+
+        # Reset environments
+        env_multiple.reset()
+        env_multiple.set_init_state(states[0])
+
+        env_single.reset()
+        copy_overlap(env_multiple, env_single)
+
+        # Collect states and actions
+        replay_states = []
+        replay_actions = []
+        
+        # Get initial state
+        obs, _, _, _ = env_single.step([0.] * 7)  # Don't advance physics, just get state
+        initial_state = env_single.env.sim.get_state().flatten()
+        replay_states.append(initial_state)
+
+        # Replay actions and collect states
+        done, info = False, {}
+        for step_id, action in enumerate(actions):
+            # Execute action
+            obs, _, done, info = env_single.step(action)
+            
+            # Record action and new state
+            replay_actions.append(action.copy())
+            current_state = env_single.env.sim.get_state().flatten()
+            replay_states.append(current_state)
+
+            if done:
+                break
+
+        # Remove the last state (consistent with collect_demonstration.py)
+        if len(replay_states) > 0:
+            replay_states = replay_states[:-1]
+        
+        # Ensure states and actions have consistent length
+        min_len = min(len(replay_states), len(replay_actions))
+        replay_states = replay_states[:min_len]
+        replay_actions = replay_actions[:min_len]
+        
+        if len(replay_states) > 0 and len(replay_actions) > 0:
+            collected_demos.append({
+                "states": replay_states,
+                "actions": replay_actions
+            })
+            
+            success = info.get("success", done)
+            print(f"Demo {demo_idx:02d} – {'SUCCESS' if success else 'FAIL'} "
+                  f"(states: {len(replay_states)}, actions: {len(replay_actions)})")
+            if success:
+                success_cnt += 1
+        else:
+            collected_demos.append(None)
+            print(f"Demo {demo_idx:02d} – EMPTY (skipped)")
+
+    # Save to HDF5
+    # Use task name as filename prefix
+    output_path = os.path.join(output_dir, f"{task_single.name}_replay.hdf5")
+    create_hdf5_from_replays(
+        output_path, 
+        collected_demos, 
+        env_info, 
+        problem_info, 
+        bddl_single,
+        env_single
+    )
+
+    # Statistics and summary
+    total_demos = len([d for d in collected_demos if d is not None])
+    if total_demos > 0:
+        success_rate = success_cnt / total_demos
+        print(f"\nSUMMARY: {success_cnt}/{total_demos} replays succeed "
+              f"({success_rate:.2%})")
+    else:
+        print(f"\nSUMMARY: No valid demonstrations were collected")
+    print(f"HDF5 file saved to: {output_path}")
+
+    # Verify saved file
+    with h5py.File(output_path, "r") as f:
+        demo_keys = [key for key in f["data"].keys() if key.startswith("demo_")]
+        # Sort demo keys by numerical order
+        demo_keys.sort(key=lambda x: int(x.split("_")[1]))
+        
+        print(f"Saved {len(demo_keys)} demonstrations")
+        for key in demo_keys:
+            demo_grp = f["data"][key]
+            print(f"  {key}: {len(demo_grp['states'])} states, {len(demo_grp['actions'])} actions")
+
+    # Clean up
+    env_multiple.close()
+    env_single.close()
+
+
+def joint_sizes(jt: int) -> Tuple[int, int]:
+    """Get joint sizes for different joint types.
+    
+    Args:
+        jt: Joint type identifier
+        
+    Returns:
+        Tuple of (position dimensions, velocity dimensions)
+    """
+    return {0: (7, 6), 1: (4, 3), 2: (1, 1), 3: (1, 1)}[jt]
+
+def copy_overlap(src_env: OffScreenRenderEnv, dst_env: OffScreenRenderEnv) -> None:
+    """Copy overlapping state from source environment to destination environment.
+    
+    Args:
+        src_env: Source environment to copy state from
+        dst_env: Destination environment to copy state to
+    """
     m_s, d_s = src_env.env.sim.model, src_env.env.sim.data
     m_d, d_d = dst_env.env.sim.model, dst_env.env.sim.data
 
@@ -73,165 +277,67 @@ def copy_overlap(src_env, dst_env):
         d_d.qpos[qd:qd+nq] = d_s.qpos[qs:qs+nq]
         d_d.qvel[vd:vd+nv] = d_s.qvel[vs:vs+nv]
 
-    # mocap（相机/道具）—— 如果模型使用了
+    # Copy mocap data (camera/props) if the model uses them
     nmc = min(m_s.nmocap, m_d.nmocap)
     if nmc:
-        d_d.mocap_pos [:nmc] = d_s.mocap_pos [:nmc]
+        d_d.mocap_pos[:nmc] = d_s.mocap_pos[:nmc]
         d_d.mocap_quat[:nmc] = d_s.mocap_quat[:nmc]
 
     dst_env.env.sim.forward()
 
-def create_hdf5_from_replays(output_path, collected_demos, env_info, problem_info, bddl_file_path):
-    """
-    创建与collect_demonstration.py相同格式的hdf5文件
+def create_hdf5_from_replays(
+    output_path: str, 
+    collected_demos: List[Any], 
+    env_info: str, 
+    problem_info: Dict[str, Any], 
+    bddl_file_path: str,
+    env_single: OffScreenRenderEnv
+) -> None:
+    """Create an HDF5 file from collected demonstrations.
+    
+    Args:
+        output_path: Path to save the HDF5 file
+        collected_demos: List of dictionaries containing states and actions, or None for failed demos
+        env_info: Environment configuration information in JSON format
+        problem_info: Problem information extracted from BDDL
+        bddl_file_path: Path to the BDDL file used for the task
+        env_single: Environment instance for extracting model XML
     """
     f = h5py.File(output_path, "w")
     grp = f.create_group("data")
     
-    # 存储每个demo
+    # Store each demonstration
     for demo_idx, demo_data in enumerate(collected_demos):
         if demo_data is None:
             continue
             
         ep_data_grp = grp.create_group("demo_{}".format(demo_idx + 1))
         
-        # 存储model xml
-        model_xml = env_simple.env.sim.model.get_xml()
+        # Store model XML
+        model_xml = env_single.env.sim.model.get_xml()
         ep_data_grp.attrs["model_file"] = model_xml
         
-        # 写入states和actions数据集
+        # Write states and actions datasets
         ep_data_grp.create_dataset("states", data=np.array(demo_data["states"]))
         ep_data_grp.create_dataset("actions", data=np.array(demo_data["actions"]))
     
-    # 写入元数据属性
+    # Write metadata attributes
     now = datetime.datetime.now()
     grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
     grp.attrs["time"] = "{}:{}:{}".format(now.hour, now.minute, now.second)
     grp.attrs["repository_version"] = suite.__version__
-    grp.attrs["env"] = env_simple.env.__class__.__name__
+    grp.attrs["env"] = env_single.env.__class__.__name__
     grp.attrs["env_info"] = env_info
     grp.attrs["problem_info"] = json.dumps(problem_info)
     grp.attrs["bddl_file_name"] = bddl_file_path
     
-    # 读取bddl文件内容
+    # Read and store BDDL file content
     with open(bddl_file_path, "r", encoding="utf-8") as f:
         bddl_content = f.read()
     grp.attrs["bddl_file_content"] = bddl_content
     
     f.close()
 
-# ---------- 准备环境信息 ----------
-# 模拟collect_demonstration.py中的config信息
-controller_config = load_controller_config(default_controller="OSC_POSE")
-config = {
-    "robots": ["Panda"],  # 根据实际机器人调整
-    "controller_configs": controller_config,  # 根据实际控制器调整
-}
-env_info = json.dumps(config)
 
-# 获取问题信息（需要导入BDDLUtils）
-try:
-    import libero.libero.envs.bddl_utils as BDDLUtils
-    problem_info = BDDLUtils.get_problem_info(bddl_simplified)
-except:
-    # 如果无法获取，创建基本信息
-    problem_info = {
-        "problem_name": "PickAndPlace",
-        "domain_name": "libero_object", 
-        "language_instruction": "pick the alphabet soup and place it in the basket"
-    }
-
-# ---------- 收集回放数据 ----------
-collected_demos = []
-success_cnt = 0
-
-for demo_idx in range(max_demos):
-    demo_key = f"demo_{demo_idx}"
-    if demo_key not in demo_h5:
-        print(f"[!] 数据集中没有 {demo_key}，提前结束")
-        break
-
-    demo      = demo_h5[demo_key]
-    states    = demo["states"]
-    actions   = demo["actions"]
-
-    # 重置环境
-    env_full.reset()
-    env_full.set_init_state(states[0])
-
-    env_simple.reset()
-    copy_overlap(env_full, env_simple)
-
-    # 收集状态和动作
-    replay_states = []
-    replay_actions = []
-    
-    # 获取初始状态
-    obs, _, _, _ = env_simple.step([0.] * 7)  # 不推进物理，只获取状态
-    initial_state = env_simple.env.sim.get_state().flatten()
-    replay_states.append(initial_state)
-
-    # -------- 回放动作并收集状态 --------
-    done, info = False, {}
-    for step_id, action in enumerate(actions):
-        # 执行动作
-        obs, _, done, info = env_simple.step(action)
-        
-        # 记录动作和新状态
-        replay_actions.append(action.copy())
-        current_state = env_simple.env.sim.get_state().flatten()
-        replay_states.append(current_state)
-
-        if done:
-            break
-
-    # 移除最后一个状态（保持与collect_demonstration.py一致）
-    if len(replay_states) > 0:
-        replay_states = replay_states[:-1]
-    
-    # 确保states和actions长度一致
-    min_len = min(len(replay_states), len(replay_actions))
-    replay_states = replay_states[:min_len]
-    replay_actions = replay_actions[:min_len]
-    
-    if len(replay_states) > 0 and len(replay_actions) > 0:
-        collected_demos.append({
-            "states": replay_states,
-            "actions": replay_actions
-        })
-        
-        success = info.get("success", done)
-        print(f"Demo {demo_idx:02d} – {'SUCCESS' if success else 'FAIL'} "
-              f"(states: {len(replay_states)}, actions: {len(replay_actions)})")
-        if success:
-            success_cnt += 1
-    else:
-        collected_demos.append(None)
-        print(f"Demo {demo_idx:02d} – EMPTY (skipped)")
-
-# ---------- 保存为HDF5 ----------
-output_path = os.path.join(output_dir, "replayed_demos.hdf5")
-create_hdf5_from_replays(
-    output_path, 
-    collected_demos, 
-    env_info, 
-    problem_info, 
-    bddl_simplified
-)
-
-# ---------- 统计 ----------
-total_demos = len([d for d in collected_demos if d is not None])
-print(f"\nSUMMARY: {success_cnt}/{total_demos} replays succeed "
-      f"({success_cnt/total_demos:.2%})")
-print(f"HDF5 file saved to: {output_path}")
-
-# 验证保存的文件
-with h5py.File(output_path, "r") as f:
-    print(f"Saved {len(f['data'].keys())} demonstrations")
-    for key in f["data"].keys():
-        if key.startswith("demo_"):
-            demo_grp = f["data"][key]
-            print(f"  {key}: {len(demo_grp['states'])} states, {len(demo_grp['actions'])} actions")
-
-env_full.close()
-env_simple.close()
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,4 @@
+1. First, run replay script to replay actions from multi-object environment. Get an hdf5 file.
+  - The replay is saved in the hdf5_output folder.
+
+2. Second, run data creation script to create dataset from the hdf5 file in previous step.
