@@ -116,9 +116,9 @@ def main():
     cap_index = 5
 
     for (i, ep) in enumerate(demos):
-        print("Playing back random episode... (press ESC to quit)")
+        print("Playing back episodes... (press ESC to quit)")
+        print(f"Processing episode {i + 1}/{len(demos)}: {ep}")
 
-        # # select an episode randomly
         # read the model xml, using the metadata stored in the attribute for this episode
         model_xml = f["data/{}".format(ep)].attrs["model_file"]
         reset_success = False
@@ -222,9 +222,10 @@ def main():
         dones[-1] = 1
         rewards = np.zeros(len(actions)).astype(np.uint8)
         rewards[-1] = 1
-        print(len(actions), len(agentview_images))
+        print(
+            f"Episode {i} has {len(actions)} actions, {len(agentview_images)} agentview images"
+        )
         assert len(actions) == len(agentview_images)
-        print(len(actions))
 
         ep_data_grp = grp.create_group(f"demo_{i}")
 
