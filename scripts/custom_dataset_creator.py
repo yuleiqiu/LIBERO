@@ -1,21 +1,17 @@
 import argparse
+import json
 import os
 from pathlib import Path
+
 import h5py
 import numpy as np
-import json
-import robosuite
-import robosuite.utils.transform_utils as T
 import robosuite.macros as macros
+import robosuite.utils.transform_utils as T
 
 import init_path
 import libero.libero.utils.utils as libero_utils
-import cv2
-from PIL import Image
-from robosuite.utils import camera_utils
-
-from libero.libero.envs import *
 from libero.libero import get_libero_path
+from libero.libero.envs import *
 
 def main():
     parser = argparse.ArgumentParser()
@@ -26,17 +22,6 @@ def main():
         action="store_true",
     )
     parser.add_argument("--use-camera-obs", action="store_true")
-    parser.add_argument(
-        "--dataset-path",
-        type=str,
-        default="datasets/",
-    )
-
-    parser.add_argument(
-        "--dataset-name",
-        type=str,
-        default="training_set",
-    )
 
     parser.add_argument("--no-proprio", action="store_true")
 
