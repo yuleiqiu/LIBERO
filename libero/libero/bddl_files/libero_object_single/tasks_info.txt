@@ -1,0 +1,1 @@
+libero/bddl_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.bddl

@@ -141,7 +141,7 @@ libero_task_map = {
     ],
     "libero_object_single": [
         "pick_up_the_alphabet_soup_and_place_it_in_the_basket",
-        # "pick_up_the_cream_cheese_and_place_it_in_the_basket",
+        "pick_up_the_cream_cheese_and_place_it_in_the_basket",
         # "pick_up_the_salad_dressing_and_place_it_in_the_basket",
         # "pick_up_the_bbq_sauce_and_place_it_in_the_basket",
         # "pick_up_the_ketchup_and_place_it_in_the_basket",
