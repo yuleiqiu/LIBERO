@@ -16,6 +16,7 @@ task_suite = benchmark_dict[task_suite_name]()
 bddl_files_default_path = get_libero_path("bddl_files")
 
 # retrieve a specific task
+# TODO：hardcode the task id here, try to make it an arugment later
 task_id = 0 # pick alphabet soup and place it in the basket
 task = task_suite.get_task(task_id)
 task_name = task.name
@@ -58,6 +59,7 @@ assert env_old_sim_states.shape == state.shape, "The sim state shape should not 
 
 
 # Create a new environment from new args with single object
+# TODO: hardcode the bddl file name here, try to make it an argument later
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 tmp_bddl_dir = os.path.join(parent_dir, "get_started", "tmp", "pddl_files")
