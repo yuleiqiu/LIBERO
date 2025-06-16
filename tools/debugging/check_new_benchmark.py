@@ -22,7 +22,7 @@ def main():
     get_benchmark_dict(help=True)
     
     # Configure benchmark to test
-    benchmark_name = "libero_object_single"  # 替换为您的 benchmark 名称
+    benchmark_name = "libero_object_single"  # change this to the benchmark you want to test
     
     try:
         # Get and instantiate benchmark
