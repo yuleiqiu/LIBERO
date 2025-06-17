@@ -62,18 +62,9 @@ class AutomationPipeline:
         task_single = task_suite_single.get_task(self.task_id)
 
         datasets_dir = get_libero_path("datasets")
-        self.replay_output_dir = datasets_dir / "replay" / task_suite_single.name 
-        self.processed_output_dir = os.path.join(datasets_dir, "processed")
-        self.init_states_dir = os.path.join(
-            get_libero_path("init_states"),
-            task_single.problem_folder,
-            task_single.init_states_file,
-        )
-        
-        # Create output directories if they don't exist
-        os.makedirs(self.replay_output_dir, exist_ok=True)
-        os.makedirs(self.processed_output_dir, exist_ok=True)
-        os.makedirs(self.init_states_dir, exist_ok=True)
+        self.replay_output_dir = Path(datasets_dir) / "replay" / task_suite_single.name
+        self.processed_output_dir = Path(datasets_dir) / "processed"
+        self.init_states_dir = Path(get_libero_path("init_states")) / task_single.problem_folder / task_single.init_states_file
 
         # Track pipeline status
         self.pipeline_results = {

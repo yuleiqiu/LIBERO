@@ -164,8 +164,8 @@ fi
 
 # Add common arguments
 CMD_ARGS+=(
-    "--task-suite-name-multiple" "$TASK_SUITE_NAME_MULTIPLE"
-    "--task-suite-name-single" "$TASK_SUITE_NAME_SINGLE"
+    "--task-suite-multiple" "$TASK_SUITE_NAME_MULTIPLE"
+    "--task-suite-single" "$TASK_SUITE_NAME_SINGLE"
     "--max-demos" "$MAX_DEMOS"
     "--camera-height" "$CAMERA_HEIGHT"
     "--camera-width" "$CAMERA_WIDTH"
