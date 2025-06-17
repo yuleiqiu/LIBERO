@@ -22,6 +22,20 @@ from libero.libero import benchmark, get_libero_path
 from libero.libero.envs.env_wrapper import OffScreenRenderEnv
 
 
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Replay LIBERO demonstrations and save as HDF5")
@@ -96,7 +110,10 @@ def main():
     bddl_multiple = os.path.join(bddl_dir, task_multiple.problem_folder, task_multiple.bddl_file)
     bddl_single = os.path.join(bddl_dir, task_single.problem_folder, task_single.bddl_file)
 
-    output_dir = os.path.join("replay", "hdf5_output")
+    # Create replay folder at the project root level (two levels up from generate_new_dataset)
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # Go up 3 levels to project root
+    output_dir = os.path.join(project_root, "replay", "hdf5_output")
     os.makedirs(output_dir, exist_ok=True)
 
     demo_dir = get_libero_path("datasets")
@@ -136,6 +153,7 @@ def main():
     # Collect replay data
     collected_demos = []
     success_cnt = 0
+    demo_results = []  # Record results for each demo
 
     for demo_idx in range(MAX_DEMOS):
         demo_key = f"demo_{demo_idx}"
@@ -193,12 +211,31 @@ def main():
             })
             
             success = info.get("success", done)
+            # Convert numpy boolean to Python boolean for JSON serialization
+            success = bool(success)
+            demo_results.append({
+                "demo_id": demo_idx,
+                "demo_key": demo_key,
+                "success": success,
+                "num_states": len(replay_states),
+                "num_actions": len(replay_actions),
+                "status": "SUCCESS" if success else "FAIL"
+            })
+            
             print(f"Demo {demo_idx:02d} – {'SUCCESS' if success else 'FAIL'} "
                   f"(states: {len(replay_states)}, actions: {len(replay_actions)})")
             if success:
                 success_cnt += 1
         else:
             collected_demos.append(None)
+            demo_results.append({
+                "demo_id": demo_idx,
+                "demo_key": demo_key,
+                "success": False,  # Explicitly use Python bool
+                "num_states": 0,
+                "num_actions": 0,
+                "status": "EMPTY"
+            })
             print(f"Demo {demo_idx:02d} – EMPTY (skipped)")
 
     # Save to HDF5
@@ -212,6 +249,27 @@ def main():
         bddl_single,
         env_single
     )
+    
+    # Save results to JSON
+    json_output_path = os.path.join(output_dir, f"{task_single.name}_replay_results.json")
+    total_demos = len(demo_results)
+    valid_demos = len([d for d in collected_demos if d is not None])
+    
+    results_summary = {
+        "task_name": task_single.name,
+        "task_id": TASK_ID,
+        "task_suite_single": TASK_SUITE_NAME_SINGLE,
+        "task_suite_multiple": TASK_SUITE_NAME_MULTIPLE,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "total_demos_processed": total_demos,
+        "valid_demos_collected": valid_demos,
+        "success_count": success_cnt,
+        "success_rate": success_cnt / valid_demos if valid_demos > 0 else 0.0,
+        "demo_details": demo_results
+    }
+    
+    with open(json_output_path, 'w', encoding='utf-8') as f:
+        json.dump(results_summary, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
 
     # Statistics and summary
     total_demos = len([d for d in collected_demos if d is not None])
@@ -222,6 +280,7 @@ def main():
     else:
         print(f"\nSUMMARY: No valid demonstrations were collected")
     print(f"HDF5 file saved to: {output_path}")
+    print(f"Results JSON saved to: {json_output_path}")
 
     # Verify saved file
     with h5py.File(output_path, "r") as f:

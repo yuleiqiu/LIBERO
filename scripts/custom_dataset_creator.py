@@ -51,9 +51,9 @@ def main():
     
     # Change the file name to avoid conflicts with original demo file
     bddl_basename = os.path.basename(bddl_file_name).replace(".bddl", "")
-    output_filename = f"{bddl_basename}_processed_demo.hdf5"
+    output_filename = f"{bddl_basename}_demo.hdf5"
 
-    # Create output directory and file path
+    # Output directory and file path
     datasets_dir = get_libero_path("datasets")
     output_dir = os.path.join(datasets_dir, "processed")
     os.makedirs(output_dir, exist_ok=True)
