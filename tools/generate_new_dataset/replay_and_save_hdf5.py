@@ -75,6 +75,12 @@ def parse_args():
         default=128,
         help="Camera width (default: 128)"
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Output directory for HDF5 and JSON files"
+    )
     return parser.parse_args()
 
 
@@ -89,13 +95,13 @@ def main():
     MAX_DEMOS = args.max_demos
     CAMERA_HEIGHT = args.camera_height
     CAMERA_WIDTH = args.camera_width
+    OUTPUT_DIR = args.output_dir
 
     # Initialize benchmark and task objects
     try:
         benchmark_dict = benchmark.get_benchmark_dict()
         task_suite_multiple = benchmark_dict[TASK_SUITE_NAME_MULTIPLE]()
         task_multiple = task_suite_multiple.get_task(TASK_ID)
-
         task_suite_single = benchmark_dict[TASK_SUITE_NAME_SINGLE]()
         task_single = task_suite_single.get_task(TASK_ID)
     except KeyError as e:
@@ -110,14 +116,12 @@ def main():
     bddl_multiple = os.path.join(bddl_dir, task_multiple.problem_folder, task_multiple.bddl_file)
     bddl_single = os.path.join(bddl_dir, task_single.problem_folder, task_single.bddl_file)
 
-    # Create replay folder at the project root level (two levels up from generate_new_dataset)
-    script_dir = os.path.dirname(os.path.abspath(__file__))  # Current script directory
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # Go up 3 levels to project root
-    output_dir = os.path.join(project_root, "replay", "hdf5_output")
-    os.makedirs(output_dir, exist_ok=True)
-
-    demo_dir = get_libero_path("datasets")
+    demo_dir = get_libero_path("datasets") # Still needed for input demo file path
     demo_file = os.path.join(demo_dir, task_suite_multiple.get_task_demonstration(TASK_ID))
+
+    # Use the output_dir passed as an argument
+    output_dir = OUTPUT_DIR 
+    os.makedirs(output_dir, exist_ok=True)
     
     # Check if demo file exists
     if not os.path.exists(demo_file):
