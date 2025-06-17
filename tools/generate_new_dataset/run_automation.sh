@@ -14,8 +14,8 @@ NC='\033[0m' # No Color
 TASK_ID=""
 START_ID=""
 END_ID=""
-TASK_SUITE_MULTIPLE="libero_object"
-TASK_SUITE_SINGLE="libero_object_single"
+TASK_SUITE_NAME_MULTIPLE="libero_object"
+TASK_SUITE_NAME_SINGLE="libero_object_single"
 MAX_DEMOS=50
 CAMERA_HEIGHT=128
 CAMERA_WIDTH=128
@@ -38,8 +38,8 @@ show_usage() {
     echo "  --max-workers N              Number of parallel workers (default: 1)"
     echo ""
     echo "Common options:"
-    echo "  --task-suite-multiple NAME   Multiple task suite name (default: libero_object)"
-    echo "  --task-suite-single NAME     Single task suite name (default: libero_object_single)"
+    echo "  --task-suite-name-multiple NAME   Multiple task suite name (default: libero_object)"
+    echo "  --task-suite-name-single NAME     Single task suite name (default: libero_object_single)"
     echo "  --max-demos N                Maximum demos per task (default: 50)"
     echo "  --camera-height N            Camera height (default: 128)"
     echo "  --camera-width N             Camera width (default: 128)"
@@ -71,12 +71,12 @@ while [[ $# -gt 0 ]]; do
             BATCH_MODE=true
             shift 2
             ;;
-        --task-suite-multiple)
-            TASK_SUITE_MULTIPLE="$2"
+        --task-suite-name-multiple)
+            TASK_SUITE_NAME_MULTIPLE="$2"
             shift 2
             ;;
-        --task-suite-single)
-            TASK_SUITE_SINGLE="$2"
+        --task-suite-name-single)
+            TASK_SUITE_NAME_SINGLE="$2"
             shift 2
             ;;
         --max-demos)
@@ -128,6 +128,7 @@ elif [[ -z "$TASK_ID" ]]; then
 fi
 
 # Get script directory
+PROJECT_ROOT="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Print configuration
@@ -139,8 +140,8 @@ if [[ "$BATCH_MODE" == "true" ]]; then
 else
     echo -e "${BLUE}Mode:${NC} Single task $TASK_ID"
 fi
-echo -e "${BLUE}Task suite multiple:${NC} $TASK_SUITE_MULTIPLE"
-echo -e "${BLUE}Task suite single:${NC} $TASK_SUITE_SINGLE"
+echo -e "${BLUE}Task suite name for multiple:${NC} $TASK_SUITE_NAME_MULTIPLE"
+echo -e "${BLUE}Task suite name for single:${NC} $TASK_SUITE_NAME_SINGLE"
 echo -e "${BLUE}Max demos:${NC} $MAX_DEMOS"
 echo -e "${BLUE}Camera size:${NC} ${CAMERA_WIDTH}x${CAMERA_HEIGHT}"
 echo -e "${BLUE}Dry run:${NC} $DRY_RUN"
@@ -163,8 +164,8 @@ fi
 
 # Add common arguments
 CMD_ARGS+=(
-    "--task-suite-multiple" "$TASK_SUITE_MULTIPLE"
-    "--task-suite-single" "$TASK_SUITE_SINGLE"
+    "--task-suite-name-multiple" "$TASK_SUITE_NAME_MULTIPLE"
+    "--task-suite-name-single" "$TASK_SUITE_NAME_SINGLE"
     "--max-demos" "$MAX_DEMOS"
     "--camera-height" "$CAMERA_HEIGHT"
     "--camera-width" "$CAMERA_WIDTH"

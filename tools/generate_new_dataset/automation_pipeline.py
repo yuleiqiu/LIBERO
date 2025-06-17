@@ -20,53 +20,66 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from libero.libero import benchmark, get_libero_path
+
 
 class AutomationPipeline:
     """Main automation pipeline for LIBERO dataset processing."""
-    
-    def __init__(self, task_id: int, task_suite_multiple: str = "libero_object", 
-                 task_suite_single: str = "libero_object_single", max_demos: int = 50,
+
+    def __init__(self, task_id: int, task_suite_name_multiple: str = "libero_object",
+                 task_suite_name_single: str = "libero_object_single", max_demos: int = 50,
                  camera_height: int = 128, camera_width: int = 128):
         """
         Initialize the automation pipeline.
         
         Args:
             task_id: Task ID to process
-            task_suite_multiple: Multiple task suite name
-            task_suite_single: Single task suite name
+            task_suite_name_multiple: Multiple task suite name
+            task_suite_name_single: Single task suite name
             max_demos: Maximum number of demonstrations to process
             camera_height: Camera height for rendering
             camera_width: Camera width for rendering
         """
         self.task_id = task_id
-        self.task_suite_multiple = task_suite_multiple
-        self.task_suite_single = task_suite_single
+        self.task_suite_multiple = task_suite_name_multiple
+        self.task_suite_single = task_suite_name_single
         self.max_demos = max_demos
         self.camera_height = camera_height
         self.camera_width = camera_width
         
         # Set up paths
         self.base_dir = Path(__file__).parent
-        self.replay_script_path = self.base_dir / "replay" / "replay_and_save_hdf5.py"
-        self.dataset_creator_script_path = Path(__file__).parent.parent.parent / "scripts" / "custom_dataset_creator.py"
-        self.init_states_script_path = self.base_dir.parent / "generate_init_states.py"
         
-        # Output directories - replay dir is now at project root level
-        project_root = self.base_dir.parent.parent  # Go up 2 levels to project root
-        self.replay_output_dir = project_root / "replay" / "hdf5_output"
-        self.processed_output_dir = Path("libero/datasets/processed")
-        self.init_states_dir = Path("libero/libero/init_files")
+        self.replay_script_path = self.base_dir / "replay_and_save_hdf5.py"
+        self.dataset_creator_script_path = self.base_dir / "create_dataset.py"
+        self.init_states_script_path = self.base_dir / "generate_init_states.py"
+        
+        # Output directories
+        benchmark_dict = benchmark.get_benchmark_dict()
+        task_suite_multiple = benchmark_dict[self.task_suite_multiple]()
+        task_multiple = task_suite_multiple.get_task(self.task_id)
+        task_suite_single = benchmark_dict[self.task_suite_single]()
+        task_single = task_suite_single.get_task(self.task_id)
+
+        datasets_dir = get_libero_path("datasets")
+        self.replay_output_dir = datasets_dir / "replay" / task_suite_single.name 
+        self.processed_output_dir = os.path.join(datasets_dir, "processed")
+        self.init_states_dir = os.path.join(
+            get_libero_path("init_states"),
+            task_single.problem_folder,
+            task_single.init_states_file,
+        )
         
         # Create output directories if they don't exist
-        self.replay_output_dir.mkdir(parents=True, exist_ok=True)
-        self.processed_output_dir.mkdir(parents=True, exist_ok=True)
-        self.init_states_dir.mkdir(parents=True, exist_ok=True)
-        
+        os.makedirs(self.replay_output_dir, exist_ok=True)
+        os.makedirs(self.processed_output_dir, exist_ok=True)
+        os.makedirs(self.init_states_dir, exist_ok=True)
+
         # Track pipeline status
         self.pipeline_results = {
             "task_id": task_id,
-            "task_suite_multiple": task_suite_multiple,
-            "task_suite_single": task_suite_single,
+            "task_suite_multiple": task_suite_name_multiple,
+            "task_suite_single": task_suite_name_single,
             "steps_completed": [],
             "steps_failed": [],
             "output_files": {},
@@ -148,7 +161,8 @@ class AutomationPipeline:
             "--task-suite-single", self.task_suite_single,
             "--max-demos", str(self.max_demos),
             "--camera-height", str(self.camera_height),
-            "--camera-width", str(self.camera_width)
+            "--camera-width", str(self.camera_width),
+            "--output-dir", str(self.replay_output_dir)  # Add this line
         ]
         
         success, output = self.run_command(
@@ -405,8 +419,8 @@ def main():
     # Create and run pipeline
     pipeline = AutomationPipeline(
         task_id=args.task_id,
-        task_suite_multiple=args.task_suite_multiple,
-        task_suite_single=args.task_suite_single,
+        task_suite_name_multiple=args.task_suite_multiple,
+        task_suite_name_single=args.task_suite_single,
         max_demos=args.max_demos,
         camera_height=args.camera_height,
         camera_width=args.camera_width
