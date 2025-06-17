@@ -1,0 +1,4 @@
+1. Create bddl files
+2. Change task mapping in libero_suite_task_map.py
+3. Replay actions from multi-object dataset
+4. Generate init_files for the task

@@ -201,11 +201,11 @@ class GenerateInitStates:
                 print("Confirmed overwriting existing file...")
                 return True
             elif user_input in ['n', 'no']:
-                print("Operation cancelled, keeping existing file unchanged.")
+                print("Overwrite cancelled.")
                 return False
             else:
                 print("Please enter 'y' (yes) or 'n' (no)")
-                continue
+                return True
 
     def _save_states_to_file(self, all_init_states: np.ndarray, task_name: str, benchmark_name: str) -> str:
         """
@@ -324,6 +324,7 @@ def main():
 
     # Generate initial states
     generator.generate_init_states()
+
 
 if __name__ == "__main__":
     main()
