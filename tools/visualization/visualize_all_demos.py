@@ -25,7 +25,7 @@ def main():
 
     # Allow specifying task_id via command line argument
     parser = argparse.ArgumentParser(description='Visualize init states of a LIBERO task')
-    parser.add_argument('--task_id', type=int, default=0, help='Task ID to visualize')
+    parser.add_argument('--task-id', type=int, default=0, help='Task ID to visualize')
     parser.add_argument('--benchmark', type=str, default="libero_object", help='Benchmark name')
     args = parser.parse_args()
 
@@ -49,7 +49,7 @@ def main():
     demo_file = os.path.join(datasets_default_path, benchmark_instance.get_task_demonstration(task_id))
 
     # Create output directory if it doesn't exist
-    output_dir = f"visualizations/{benchmark_instance.name}/task_{task_id}_demos"
+    output_dir = f"libero/datasets/{benchmark_instance.name}/task_{task_id}_demos"
     os.makedirs(output_dir, exist_ok=True)
 
     # Check if videos already exist in the output directory
