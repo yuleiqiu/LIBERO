@@ -225,7 +225,8 @@ class GenerateInitStates:
 
         # Save all states to file
         save_path = os.path.join(save_dir, f"{task_name}.init")
-        
+        save_path_pruned = os.path.join(save_dir, f"{task_name}.pruned_init")
+
         # Check if file already exists and prompt for overwrite
         if os.path.exists(save_path):
             if not self._prompt_file_overwrite(save_path, task_name):
@@ -233,6 +234,7 @@ class GenerateInitStates:
 
         # Save data using torch.save
         torch.save(all_init_states, save_path)
+        torch.save(all_init_states, save_path_pruned)
         return save_path
 
     def _print_statistics(self, all_init_states: np.ndarray, save_path: str):

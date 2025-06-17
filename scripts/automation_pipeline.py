@@ -26,32 +26,34 @@ from libero.libero import benchmark, get_libero_path
 class AutomationPipeline:
     """Main automation pipeline for LIBERO dataset processing."""
 
-    def __init__(self, task_id: int, task_suite_name_multiple: str = "libero_object",
-                 task_suite_name_single: str = "libero_object_single", max_demos: int = 50,
-                 camera_height: int = 128, camera_width: int = 128):
+    def __init__(self, task_id: int, task_suite_multiple: str = "libero_object",
+                 task_suite_single: str = "libero_object_single", max_demos: int = 50,
+                 camera_height: int = 128, camera_width: int = 128, verbose: bool = True):
         """
         Initialize the automation pipeline.
         
         Args:
             task_id: Task ID to process
-            task_suite_name_multiple: Multiple task suite name
-            task_suite_name_single: Single task suite name
+            task_suite_multiple: Multiple task suite name
+            task_suite_single: Single task suite name
             max_demos: Maximum number of demonstrations to process
             camera_height: Camera height for rendering
             camera_width: Camera width for rendering
+            verbose: Whether to show real-time command output
         """
         self.task_id = task_id
-        self.task_suite_multiple = task_suite_name_multiple
-        self.task_suite_single = task_suite_name_single
+        self.task_suite_multiple = task_suite_multiple
+        self.task_suite_single = task_suite_single
         self.max_demos = max_demos
         self.camera_height = camera_height
         self.camera_width = camera_width
+        self.verbose = verbose
         
         # Set up paths
         self.base_dir = Path(__file__).parent
         
         self.replay_script_path = self.base_dir / "replay_and_save_hdf5.py"
-        self.dataset_creator_script_path = self.base_dir / "create_dataset.py"
+        self.dataset_creator_script_path = self.base_dir / "create_dataset_new.py"
         self.init_states_script_path = self.base_dir / "generate_init_states.py"
         
         # Output directories
@@ -69,8 +71,8 @@ class AutomationPipeline:
         # Track pipeline status
         self.pipeline_results = {
             "task_id": task_id,
-            "task_suite_multiple": task_suite_name_multiple,
-            "task_suite_single": task_suite_name_single,
+            "task_suite_multiple": task_suite_multiple.name,
+            "task_suite_single": task_suite_single.name,
             "steps_completed": [],
             "steps_failed": [],
             "output_files": {},
@@ -104,26 +106,63 @@ class AutomationPipeline:
         self.log_info(f"Command: {' '.join(command)}")
         
         try:
-            result = subprocess.run(
-                command,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                self.log_info(f"Successfully completed: {description}")
-                return True, result.stdout
-            else:
-                error_msg = f"Command failed with return code {result.returncode}"
-                if result.stderr:
-                    error_msg += f"\nStderr: {result.stderr}"
-                if result.stdout:
-                    error_msg += f"\nStdout: {result.stdout}"
-                self.log_error(error_msg)
-                return False, error_msg
+            if self.verbose:
+                # Real-time output mode
+                self.log_info("=" * 40)
+                process = subprocess.Popen(
+                    command,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
                 
+                output_lines = []
+                while True:
+                    output = process.stdout.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        # Print real-time output
+                        print(output.strip())
+                        output_lines.append(output)
+                
+                return_code = process.poll()
+                full_output = ''.join(output_lines)
+                
+                self.log_info("=" * 40)
+                
+                if return_code == 0:
+                    self.log_info(f"Successfully completed: {description}")
+                    return True, full_output
+                else:
+                    error_msg = f"Command failed with return code {return_code}"
+                    self.log_error(error_msg)
+                    return False, full_output
+            else:
+                # Silent mode (original behavior)
+                result = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0:
+                    self.log_info(f"Successfully completed: {description}")
+                    return True, result.stdout
+                else:
+                    error_msg = f"Command failed with return code {result.returncode}"
+                    if result.stderr:
+                        error_msg += f"\nStderr: {result.stderr}"
+                    if result.stdout:
+                        error_msg += f"\nStdout: {result.stdout}"
+                    self.log_error(error_msg)
+                    return False, error_msg
+                    
         except Exception as e:
             error_msg = f"Exception running command: {str(e)}"
             self.log_error(error_msg)
@@ -404,17 +443,31 @@ def main():
         default=128,
         help='Camera width for rendering'
     )
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable real-time command output (default behavior)'
+    )
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Suppress real-time command output'
+    )
     
     args = parser.parse_args()
+    
+    # Determine verbose mode - default is True unless --quiet is specified
+    verbose = not args.quiet
     
     # Create and run pipeline
     pipeline = AutomationPipeline(
         task_id=args.task_id,
-        task_suite_name_multiple=args.task_suite_multiple,
-        task_suite_name_single=args.task_suite_single,
+        task_suite_multiple=args.task_suite_multiple,
+        task_suite_single=args.task_suite_single,
         max_demos=args.max_demos,
         camera_height=args.camera_height,
-        camera_width=args.camera_width
+        camera_width=args.camera_width,
+        verbose=verbose
     )
     
     success = pipeline.run_pipeline()
