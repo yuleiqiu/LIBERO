@@ -303,49 +303,101 @@ def main():
 
 
 def joint_sizes(jt: int) -> Tuple[int, int]:
-    """Get joint sizes for different joint types.
+    """Get joint sizes for different MuJoCo joint types.
+    
+    This function maps MuJoCo joint type identifiers to their corresponding
+    position and velocity dimensions. These dimensions are used to properly
+    copy joint states between different simulation environments.
     
     Args:
-        jt: Joint type identifier
+        jt: Joint type identifier from MuJoCo simulation model
         
     Returns:
         Tuple of (position dimensions, velocity dimensions)
+        
+    Joint Type Mappings:
+        0 - Free Joint (mjJNT_FREE):
+            - Position dims (7): 3D position (x,y,z) + quaternion (qw,qx,qy,qz)
+            - Velocity dims (6): 3D linear velocity + 3D angular velocity
+            - Used for objects with complete 6-DOF freedom in 3D space
+            
+        1 - Ball Joint (mjJNT_BALL):
+            - Position dims (4): quaternion representing 3D rotation (qw,qx,qy,qz)
+            - Velocity dims (3): 3D angular velocity
+            - Allows rotation around all axes but no translation
+            
+        2 - Slide Joint (mjJNT_SLIDE):
+            - Position dims (1): displacement along single axis
+            - Velocity dims (1): velocity along that axis
+            - Allows linear motion along one axis only (e.g., drawer sliding)
+            
+        3 - Hinge Joint (mjJNT_HINGE):
+            - Position dims (1): angle around single axis
+            - Velocity dims (1): angular velocity around that axis
+            - Allows rotation around one axis only (e.g., door opening)
     """
     return {0: (7, 6), 1: (4, 3), 2: (1, 1), 3: (1, 1)}[jt]
 
 def copy_overlap(src_env: OffScreenRenderEnv, dst_env: OffScreenRenderEnv) -> None:
-    """Copy overlapping state from source environment to destination environment.
+    """Copy overlapping joint and mocap states from source to destination environment.
     
-    Args:
-        src_env: Source environment to copy state from
-        dst_env: Destination environment to copy state to
-    """
-    m_s, d_s = src_env.env.sim.model, src_env.env.sim.data
-    m_d, d_d = dst_env.env.sim.model, dst_env.env.sim.data
+    This function transfers the physical state of shared objects between two different
+    MuJoCo simulation environments. It's used to initialize the destination environment
+    with the same object positions and orientations as the source environment, enabling
+    consistent replay across different task configurations.
+    
+    The function handles:
+    1. Joint states (positions and velocities) for all matching joints
+    2. Motion capture (mocap) data for cameras and other tracked objects
+    3. Different joint types with appropriate dimensional copying
 
-    for jid in range(m_s.njnt):
+    Note that mocap is important. If not copied, the new environment will not have the same object positions and orientations.
+
+    Args:
+        src_env: Source environment to copy state from (typically multi-task env)
+        dst_env: Destination environment to copy state to (typically single-task env)
+    """
+    # Get model and data references for both environments
+    m_s, d_s = src_env.env.sim.model, src_env.env.sim.data  # source model & data
+    m_d, d_d = dst_env.env.sim.model, dst_env.env.sim.data  # destination model & data
+
+    # Copy joint states for all joints that exist in both environments
+    for jid in range(m_s.njnt):  # iterate through all joints in source model
+        # Get joint name and handle byte string conversion if needed
         name = m_s.joint_id2name(jid)
         if isinstance(name, bytes):
             name = name.decode()
+            
+        # Find corresponding joint in destination model
         try:
             jid_d = m_d.joint_name2id(name)
         except ValueError:
+            # Joint doesn't exist in destination model, skip it
             continue
         if jid_d < 0:
+            # Invalid joint ID, skip it
             continue
 
+        # Get position and velocity dimensions for this joint type
         nq, nv = joint_sizes(m_s.jnt_type[jid])
-        qs, vs = m_s.jnt_qposadr[jid], m_s.jnt_dofadr[jid]
-        qd, vd = m_d.jnt_qposadr[jid_d], m_d.jnt_dofadr[jid_d]
-        d_d.qpos[qd:qd+nq] = d_s.qpos[qs:qs+nq]
-        d_d.qvel[vd:vd+nv] = d_s.qvel[vs:vs+nv]
+        
+        # Get array indices for joint data in both models
+        # MuJoCo stores all joint data in continuous arrays (qpos for positions, qvel for velocities)
+        # qposadr and dofadr provide the starting indices for each joint's data within these arrays
+        qs, vs = m_s.jnt_qposadr[jid], m_s.jnt_dofadr[jid]      # source starting indices  
+        qd, vd = m_d.jnt_qposadr[jid_d], m_d.jnt_dofadr[jid_d]  # destination starting indices
+        
+        # Copy position and velocity data with appropriate dimensions
+        d_d.qpos[qd:qd+nq] = d_s.qpos[qs:qs+nq]  # copy joint positions
+        d_d.qvel[vd:vd+nv] = d_s.qvel[vs:vs+nv]  # copy joint velocities
 
-    # Copy mocap data (camera/props) if the model uses them
-    nmc = min(m_s.nmocap, m_d.nmocap)
+    # Copy motion capture data (for cameras, props, etc.) if both models use it
+    nmc = min(m_s.nmocap, m_d.nmocap)  # use minimum number of mocap objects
     if nmc:
-        d_d.mocap_pos[:nmc] = d_s.mocap_pos[:nmc]
-        d_d.mocap_quat[:nmc] = d_s.mocap_quat[:nmc]
+        d_d.mocap_pos[:nmc] = d_s.mocap_pos[:nmc]    # copy mocap positions
+        d_d.mocap_quat[:nmc] = d_s.mocap_quat[:nmc]  # copy mocap orientations
 
+    # Update the destination simulation to reflect the copied state
     dst_env.env.sim.forward()
 
 def create_hdf5_from_replays(
