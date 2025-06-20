@@ -113,7 +113,6 @@ class BDDLBaseDomain(SingleArmEnv):
         # For those that require visual feature changes, update the state every time step to avoid missing state changes. We keep track of this type of objects to make predicate checking more efficient.
         self.tracking_object_states_change = []
 
-        self.object_sites_dict = {}
 
         self.objects = []
         self.fixtures = []
