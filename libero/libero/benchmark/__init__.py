@@ -225,9 +225,3 @@ class LIBERO_OBJECT_SINGLE(Benchmark):
         super().__init__(task_order_index=task_order_index)
         self.name = "libero_object_single"
         self._make_benchmark()
-
-    # def _make_benchmark(self):
-    #     tasks = list(task_maps[self.name].values())
-    #     # TODO: Now use all tasks directly, skipping the task order.
-    #     self.tasks = tasks
-    #     self.n_tasks = len(self.tasks)
