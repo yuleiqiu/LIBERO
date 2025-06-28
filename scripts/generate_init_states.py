@@ -163,7 +163,7 @@ class GenerateInitStates:
             print(f"Processing seed {seed}...")
             
             # Set seed and reset environment
-            env.seed(seed)
+            env.seed(200+seed)
             env.reset()
             
             # Get initial state
