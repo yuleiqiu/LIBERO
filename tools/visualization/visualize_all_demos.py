@@ -44,8 +44,8 @@ def main():
     task = benchmark_instance.get_task(task_id)
     pp.pprint(task)
     print("============================================================")
-    init_states = benchmark_instance.get_task_init_states(task_id)
-    print(f"Number of initial states for task {task_id}: {len(init_states)}")
+    # init_states = benchmark_instance.get_task_init_states(task_id)
+    # print(f"Number of initial states for task {task_id}: {len(init_states)}")
     demo_file = os.path.join(datasets_default_path, benchmark_instance.get_task_demonstration(task_id))
 
     # Create output directory if it doesn't exist

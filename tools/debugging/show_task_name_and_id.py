@@ -2,8 +2,8 @@ import os
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 
-benchmark_dict = benchmark.get_benchmark_dict()
-task_suite_name = "libero_object" # can also choose libero_spatial, libero_object, etc.
+benchmark_dict = benchmark.get_benchmark_dict(help=True)
+task_suite_name = "libero_spatial" # can also choose libero_spatial, libero_object, etc.
 task_suite = benchmark_dict[task_suite_name]()
 
 # retrieve a specific task
