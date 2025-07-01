@@ -1,4 +1,5 @@
 1. Create bddl files
-2. Change task mapping in libero_suite_task_map.py
+2. Add the new task mapping in libero/benchmark/libero_suite_task_map.py
+3. Resigter the new benchmark in libero/benchmark/__init__.py and add it to libero_suits
 3. Replay actions from multi-object dataset
 4. Generate init_files for the task

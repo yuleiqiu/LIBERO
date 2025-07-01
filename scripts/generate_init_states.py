@@ -94,16 +94,17 @@ class GenerateInitStates:
         print(f"Number of initial states to generate: {self.num_init}")
         print(f"{'='*50}")
         
-        while True:
-            user_input = input("Do you want to proceed with this task? (y/n): ").strip().lower()
-            if user_input in ['y', 'yes']:
-                return True
-            elif user_input in ['n', 'no']:
-                print("Task selection cancelled.")
-                return False
-            else:
-                print("Please enter 'y' (yes) or 'n' (no)")
-                continue
+        # while True:
+        #     user_input = input("Do you want to proceed with this task? (y/n): ").strip().lower()
+        #     if user_input in ['y', 'yes']:
+        #         return True
+        #     elif user_input in ['n', 'no']:
+        #         print("Task selection cancelled.")
+        #         return False
+        #     else:
+        #         print("Please enter 'y' (yes) or 'n' (no)")
+        #         continue
+
     def _get_task_and_env_config(self):
         """
         Get task configuration and environment arguments.
@@ -227,10 +228,10 @@ class GenerateInitStates:
         save_path = os.path.join(save_dir, f"{task_name}.init")
         save_path_pruned = os.path.join(save_dir, f"{task_name}.pruned_init")
 
-        # Check if file already exists and prompt for overwrite
-        if os.path.exists(save_path):
-            if not self._prompt_file_overwrite(save_path, task_name):
-                return None
+        # # Check if file already exists and prompt for overwrite
+        # if os.path.exists(save_path):
+        #     if not self._prompt_file_overwrite(save_path, task_name):
+        #         return None
 
         # Save data using torch.save
         torch.save(all_init_states, save_path)

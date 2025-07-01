@@ -206,9 +206,10 @@ class AutomationPipeline:
             # Find the generated HDF5 file
             replay_files = list(self.replay_output_dir.glob("*_replay.hdf5"))
             if replay_files:
-                self.pipeline_results["output_files"]["replay_hdf5"] = str(replay_files[-1])
-                self.log_info(f"Generated replay HDF5: {replay_files[-1]}")
-            
+                newest_replay_file = max(replay_files, key=lambda f: f.stat().st_mtime)
+                self.pipeline_results["output_files"]["replay_hdf5"] = str(newest_replay_file)
+                self.log_info(f"Generated replay HDF5: {newest_replay_file}")
+
             # Find the results JSON file
             json_files = list(self.replay_output_dir.glob("*_replay_results.json"))
             if json_files:
