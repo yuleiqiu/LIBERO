@@ -108,6 +108,7 @@
 
   (:objects
     akita_black_bowl_1 - akita_black_bowl
+    cookies_1 - cookies
     plate_1 - plate
   )
 
@@ -117,8 +118,9 @@
   )
 
   (:init
-    (On akita_black_bowl_1 main_table_box_region)
+    (On akita_black_bowl_1 cookies_1)
     (On plate_1 main_table_plate_region)
+    (On cookies_1 main_table_box_region)
     (On wooden_cabinet_1 main_table_cabinet_region)
     (On flat_stove_1 main_table_stove_region)
   )

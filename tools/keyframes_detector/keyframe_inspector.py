@@ -8,8 +8,7 @@ import pprint
 
 # Third-party imports
 import numpy as np
-import torch
-import torchvision
+import tqdm
 import matplotlib.pyplot as plt
 from PIL import Image
 from termcolor import colored
@@ -28,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description='Visualize init states of a LIBERO task')
     parser.add_argument('--task-id', type=int, default=0, help='Task ID to visualize')
     parser.add_argument('--benchmark', type=str, default="libero_object", help='Benchmark name')
+    parser.add_argument('--output-dir', type=str, default="tools/keyframes_detector/tmp", help='Output directory for videos')
     args = parser.parse_args()
 
     datasets_default_path = get_libero_path("datasets")
@@ -36,147 +36,59 @@ def main():
     pp.pprint(benchmark_dict)
     print("============================================================")
     benchmark_instance = benchmark_dict[args.benchmark]()
-    
-
     task_id = args.task_id
     task = benchmark_instance.get_task(task_id)
     pp.pprint(task)
     print("============================================================")
-    init_states = benchmark_instance.get_task_init_states(task_id)
-    print(f"Number of initial states for task {task_id}: {len(init_states)}")
+
     demo_files = os.path.join(datasets_default_path, benchmark_instance.get_task_demonstration(task_id))
-
-    # # Create output directory if it doesn't exist
-    # output_dir = f"libero/datasets/{benchmark_instance.name}/task_{task_id}_demos"
-    # os.makedirs(output_dir, exist_ok=True)
-
-    # # Check if videos already exist in the output directory
-    # existing_videos = [f for f in os.listdir(output_dir) if f.endswith('.mp4')]
-    # if existing_videos:
-    #     print(f"Found {len(existing_videos)} existing videos in {output_dir}")
-    #     overwrite = input("Do you want to overwrite existing videos? (y/n): ").lower().strip()
-    #     if overwrite != 'y':
-    #         print("Operation cancelled. Existing videos will not be overwritten.")
-    #         return
-
-    # with h5py.File(demo_files, "r") as f:
-    #     demo_keys = [k for k in f["data"].keys() if k.startswith("demo_")]
-    #     num_demos = len(demo_keys)
-    #     print(f"Number of demos for task {task_id}: {num_demos}")
-
-    #     # Process each demo
-    #     for demo_key in demo_keys:
-    #         demo_id = demo_key.split("_")[1]
-    #         print(f"Processing {demo_key}...")
-            
-    #         # Get images for both views
-    #         agentview_images = f[f"data/{demo_key}/obs/agentview_rgb"][()]
-    #         eye_in_hand_images = f[f"data/{demo_key}/obs/eye_in_hand_rgb"][()]
-            
-    #         # Create video file with side-by-side views
-    #         output_path = os.path.join(output_dir, f"demo_{demo_id}.mp4")
-    #         video_writer = imageio.get_writer(output_path, fps=60)
-            
-    #         for agentview_img, eye_in_hand_img in zip(agentview_images, eye_in_hand_images):
-    #             # Create a side-by-side composite image
-    #             # First, flip the images (the ::-1 operation)
-    #             agentview_img = agentview_img[::-1]
-    #             eye_in_hand_img = eye_in_hand_img[::-1]
-                
-    #             # Concatenate the images horizontally
-    #             combined_img = np.hstack((agentview_img, eye_in_hand_img))
-                
-    #             # Add to video
-    #             video_writer.append_data(combined_img)
-            
-    #         video_writer.close()
-    #         print(f"Saved side-by-side video to {output_path}")
-
     demo_h5 = h5py.File(demo_files, "r")["data"]
+    demo_keys = [k for k in demo_h5.keys() if k.startswith("demo_")]
+    num_demos = len(demo_keys)
+    print(f"Number of demos for task {task_id}: {num_demos}")
 
     bddl_file_name = os.path.join(bddl_dir, task.problem_folder, task.bddl_file)
-    env = OffScreenRenderEnv(bddl_file_name)
+    print(f"Using BDDL file: {bddl_file_name}")
+    env = OffScreenRenderEnv(bddl_file_name=bddl_file_name)
 
-    for demo_idx in range(50):
-        demo_key = f"demo_{demo_idx}"
-        if demo_key not in demo_h5:
-            print(f"[warning] {demo_key} not found in the dataset")
-            continue
+    output_dir = args.output_dir
+    os.makedirs(output_dir, exist_ok=True)
 
-        print(f"Processing {demo_key}...")
+    for demo_idx in range(num_demos):
+        demo_key = demo_keys[demo_idx]
+        # print(f"Processing {demo_key}...")
+        env.reset()
 
         states = demo_h5[f"{demo_key}/states"][()]
-        for state in states:
-            env.sim.set_state_from_flattened(state)
-            env.sim.forward()
-            img = env.render(mode="rgb_array")
-            img = Image.fromarray(img)
-            img.save(os.path.join(datasets_default_path, f"demo_{demo_idx}_step_{state}.png"))
-            print(f"Saved image for episode {demo_idx}, step {state}")
+        agentview_images = []
+        eye_in_hand_images = []
+        for _, state in enumerate(tqdm.tqdm(states, desc=f"Processing {demo_key}")):
+            obs = env.regenerate_obs_from_state(state)
+            # print(f"Observation keys: {obs.keys()}")
+            agentview_images.append(obs["agentview_image"])
+            eye_in_hand_images.append(obs["robot0_eye_in_hand_image"])
 
-        # # Get images for both views
-        # agentview_images = demo_h5[f"{demo_key}/obs/agentview_rgb"][()]
-        # eye_in_hand_images = demo_h5[f"{demo_key}/obs/eye_in_hand_rgb"][()]
-
-        # # Create video file with side-by-side views
-        # output_path = os.path.join(datasets_default_path, f"demo_{demo_idx}.mp4")
-        # video_writer = imageio.get_writer(output_path, fps=60)
-
-        # for agentview_img, eye_in_hand_img in zip(agentview_images, eye_in_hand_images):
-        #     # Create a side-by-side composite image
-        #     # First, flip the images (the ::-1 operation)
-        #     agentview_img = agentview_img[::-1]
-        #     eye_in_hand_img = eye_in_hand_img[::-1]
+        output_path = os.path.join(output_dir, f"{demo_key}.mp4")
+        video_writer = imageio.get_writer(output_path, fps=60)
+        
+        for agentview_img, eye_in_hand_img in zip(agentview_images, eye_in_hand_images):
+            # Create a side-by-side composite image
+            # First, flip the images (the ::-1 operation)
+            agentview_img = agentview_img[::-1]
+            eye_in_hand_img = eye_in_hand_img[::-1]
             
-        #     # Concatenate the images horizontally
-        #     combined_img = np.hstack((agentview_img, eye_in_hand_img))
+            # Concatenate the images horizontally
+            combined_img = np.hstack((agentview_img, eye_in_hand_img))
             
-        #     # Add to video
-        #     video_writer.append_data(combined_img)
+            # Add to video
+            video_writer.append_data(combined_img)
+        print(f"Saved video for demo {demo_idx} at {output_path}")
+        video_writer.close()
 
-        # video_writer.close()
-        # print(f"Saved side-by-side video to {output_path}")
+        env.close()
+        break
 
-
-    # while True:
-    #     print("Playing back random episode... (press ESC to quit)")
-
-    #     ep = random.choice(demos)
-    #     env.reset()
-
-    #     states = f["data/{}/states".format(ep)][()]
-
-    #     if args.use_actions:
-    #         env.set_init_state(states[0])
-            
-    #         actions = f["data/{}/actions".format(ep)][()]
-    #         num_actions = actions.shape[0]
-    #         for j, action in enumerate(actions):
-    #             obs, reward, done, info = env.step(action)
-    #             if j % 10 == 0:
-    #                 print(f"Step {j}/{num_actions}, Reward: {reward}, Done: {done}")
-    #             if done:
-    #                 break
-
-    #             if j < num_actions - 1:
-    #                 state_playback = env.sim.get_state().flatten()
-    #                 if not np.all(np.equal(states[j + 1], state_playback)):
-    #                     err = np.linalg.norm(states[j + 1] - state_playback)
-    #                     print(f"[warning] playback diverged by {err:.2f} for episode {ep} at step {j + 1}")
-    #     else:
-    #         for state in states:
-    #             env.sim.set_state_from_flattened(state)
-    #             env.sim.forward()
-    #             # obs = env.get_obs()
-    #             # img = env.render(mode="rgb_array")
-    #             # img = Image.fromarray(img)
-    #             # img.save(os.path.join(output_dir, f"demo_{ep}_step_{state}.png"))
-    #             # print(f"Saved image for episode {ep}, step {state}")
-
-
-
-
-    print(f"All {num_demos} demos have been saved as videos in the '{output_dir}' directory")
+    # print(f"All {num_demos} demos have been saved as videos in the '{output_dir}' directory")
 
 if __name__ == "__main__":
     main()
