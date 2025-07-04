@@ -104,6 +104,7 @@ class GenerateInitStates:
         #     else:
         #         print("Please enter 'y' (yes) or 'n' (no)")
         #         continue
+        return True  # Automatically confirm for now, can be uncommented for manual confirmation
 
     def _get_task_and_env_config(self):
         """
