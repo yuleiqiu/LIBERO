@@ -16,3 +16,9 @@ logs/
 *.mp4
 libero.egg-info/
 .vscode/
+.env
+tmp/
+demonstration_data/
+standalone/standalone_runs/
+standalone/act_standalone/
+standalone/dp_standalone/

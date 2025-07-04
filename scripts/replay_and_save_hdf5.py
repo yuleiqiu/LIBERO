@@ -226,7 +226,7 @@ def main():
                 "status": "SUCCESS" if success else "FAIL"
             })
             
-            print(f"Demo {demo_idx:02d} – {'SUCCESS' if success else 'FAIL'} "
+            print(f"Demo {demo_idx:02d} - {'SUCCESS' if success else 'FAIL'} "
                   f"(states: {len(replay_states)}, actions: {len(replay_actions)})")
             if success:
                 success_cnt += 1
