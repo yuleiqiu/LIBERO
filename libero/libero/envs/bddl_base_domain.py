@@ -29,6 +29,7 @@ TASK_MAPPING = {}
 def register_problem(target_class):
     """We design the mapping to be case-INsensitive."""
     TASK_MAPPING[target_class.__name__.lower()] = target_class
+    return target_class
 
 
 import time
@@ -614,6 +615,7 @@ class BDDLBaseDomain(SingleArmEnv):
                     )
                     self.placement_initializer.append_sampler(fixture_sampler)
                 else:
+                    # print(f"Unknown object type for {object_name}")
                     # This is to place movable objects.
                     region_sampler = get_region_samplers(
                         problem_name, mapping_inv[target_name]

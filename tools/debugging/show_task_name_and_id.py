@@ -7,7 +7,6 @@ task_suite_name = "libero_spatial" # can also choose libero_spatial, libero_obje
 task_suite = benchmark_dict[task_suite_name]()
 
 # retrieve a specific task
-task_id = 0
 for task_id in range(task_suite.n_tasks):
     task = task_suite.get_task(task_id)
     task_name = task.name

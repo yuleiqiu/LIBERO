@@ -1,0 +1,57 @@
+(define (problem LIBERO_Floor_Manipulation)
+  (:domain robosuite)
+  (:language Pick the chocolate pudding and place it in the basket)
+    (:regions
+      (bin_region
+          (:target floor)
+          (:ranges (
+              (-0.01 0.25 0.01 0.27)
+            )
+          )
+      )
+      (workspace_region
+          (:target floor)
+          (:ranges (
+              (-0.4 -0.4 0.1 0.1)
+            )
+          )
+      )
+      (contain_region
+          (:target basket_1)
+      )
+    )
+
+  (:fixtures
+    floor - floor
+  )
+
+  (:objects
+    chocolate_pudding_1 - chocolate_pudding
+    basket_1 - basket
+    orange_juice_1 - orange_juice
+    bbq_sauce_1 - bbq_sauce
+    ketchup_1 - ketchup
+    salad_dressing_1 - salad_dressing
+    alphabet_soup_1 - alphabet_soup
+  )
+
+  (:obj_of_interest
+    chocolate_pudding_1
+    basket_1
+  )
+
+  (:init
+    (On chocolate_pudding_1 floor_workspace_region)
+    (On orange_juice_1 floor_workspace_region)
+    (On bbq_sauce_1 floor_workspace_region)
+    (On ketchup_1 floor_workspace_region)
+    (On salad_dressing_1 floor_workspace_region)
+    (On alphabet_soup_1 floor_workspace_region)
+    (On basket_1 floor_bin_region)
+  )
+
+  (:goal
+    (And (In chocolate_pudding_1 basket_1_contain_region))
+  )
+
+)
