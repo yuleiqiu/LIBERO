@@ -190,7 +190,7 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
                     for (x, y, z), _, other_obj in placed_objects.values():
                         if (
                             np.linalg.norm((object_x - x, object_y - y))
-                            <= other_obj.horizontal_radius + horizontal_radius
+                            <= other_obj.horizontal_radius*2 + horizontal_radius*2
                         ) and (
                             object_z - z <= other_obj.top_offset[-1] - bottom_offset[-1]
                         ):
@@ -208,6 +208,8 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
                     # location is valid, put the object down
                     pos = (object_x, object_y, object_z)
                     placed_objects[obj.name] = (pos, quat, obj)
+                    # print("Placed object: {}".format(obj.name))
+                    # print("Position: {}, {}".format(object_x, object_y))
                     success = True
                     break
 
