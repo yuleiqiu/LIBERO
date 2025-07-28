@@ -62,6 +62,7 @@ libero_suites = [
     "libero_object_single",
     "libero_spatial_single",
     "libero_object_random",
+    "libero_object_grid",
 ]
 task_maps = {}
 max_len = 0
@@ -69,7 +70,11 @@ for libero_suite in libero_suites:
     task_maps[libero_suite] = {}
 
     for task in libero_task_map[libero_suite]:
-        language = grab_language_from_filename(task + ".bddl")
+        if libero_suite == "libero_object_grid":
+            language = "Pick the alphabet soup and place it in the basket"
+        else:
+            language = grab_language_from_filename(task + ".bddl")
+
         task_maps[libero_suite][task] = Task(
             name=task,
             language=language,
@@ -228,6 +233,7 @@ class LIBERO_OBJECT_SINGLE(Benchmark):
         self.name = "libero_object_single"
         self._make_benchmark()
 
+
 @register_benchmark
 class LIBERO_SPATIAL_SINGLE(Benchmark):
     def __init__(self, task_order_index=0):
@@ -235,9 +241,23 @@ class LIBERO_SPATIAL_SINGLE(Benchmark):
         self.name = "libero_spatial_single"
         self._make_benchmark()
 
+
 @register_benchmark
 class LIBERO_OBJECT_RANDOM(Benchmark):
     def __init__(self, task_order_index=0):
         super().__init__(task_order_index=task_order_index)
         self.name = "libero_object_random"
         self._make_benchmark()
+
+
+@register_benchmark
+class LIBERO_OBJECT_GRID(Benchmark):
+    def __init__(self, task_order_index=0):
+        super().__init__(task_order_index=task_order_index)
+        self.name = "libero_object_grid"
+        self._make_benchmark()
+    
+    def _make_benchmark(self):
+        tasks = list(task_maps[self.name].values())
+        self.tasks = tasks
+        self.n_tasks = len(self.tasks)
