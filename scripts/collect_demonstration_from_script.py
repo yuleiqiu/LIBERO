@@ -30,7 +30,7 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
     reset_success = False
     while not reset_success:
         try:
-            env.reset()
+            obs = env.reset()
             reset_success = True
         except:
             continue
@@ -42,20 +42,9 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
         -1
     )  # counter to collect 10 timesteps after reaching goal
 
-    # Loop until we get a reset from the input or the task completes
-    saving = True
-    
-    sim = env.env.sim
-    model = sim.model
-    data = sim.data
-
-    # Hardcoded target and goal
-    # TODO: parse from problem_info
-    target_object_name = "alphabet_soup_1_main"
-    destination_name = "basket_1_main"
-
-    target_object_id = model.body_name2id(target_object_name)
-    destination_id = model.body_name2id(destination_name)
+    obj_of_interest = env.env.obj_of_interest.copy()
+    target_object_name = obj_of_interest[0]
+    destination_name = obj_of_interest[-1]
 
     # Control loop
     state = "MOVE_ABOVE_TARGET_OBJECT"
@@ -67,19 +56,22 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
     release_duration = 10  # Number of steps to keep gripper open for releasing
 
     lift_start_pos = None
-    noise_scale = 0.02 # Control the magnitude of the noise
+    noise_scale = 0.01 # Control the magnitude of the noise
 
     task_completed = False
-    for _ in range(600):
+    for _ in range(500):
         # Get current state
-        eef_pos = env.env._eef_xpos.copy()
-        target_pos = data.body_xpos[target_object_id].copy()
-        destination_pos = data.body_xpos[destination_id].copy()
+        eef_pos = obs["robot0_eef_pos"].copy()
+        target_pos = obs[f"{target_object_name.replace('_main', '')}_pos"].copy()
+        # print(f"Current state: {state}, EEF position: {eef_pos}, Target position: {target_pos}")
+        destination_pos = obs[f"{destination_name.replace('_main', '')}_pos"].copy()
+
+        # print(f"Current state: {state}, EEF position: {eef_pos}, Target position: {target_pos}, Destination position: {destination_pos}")
 
         action = np.zeros(7)
         # State machine logic
         if state == "MOVE_ABOVE_TARGET_OBJECT":
-            target_eef_pos = target_pos + np.array([0, 0, 0.15])
+            target_eef_pos = target_pos + np.array([0, 0, 0.2])
             target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
             if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
                 state = "OPEN_GRIPPER"
@@ -104,7 +96,7 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
                 grasp_timer += 1
             else:
                 grasp_timer = 0
-                lift_start_pos = data.body_xpos[target_object_id].copy()
+                lift_start_pos = obs[f"{target_object_name}_pos"].copy()
                 state = "LIFT_TARGET_OBJECT"
                 continue
         elif state == "LIFT_TARGET_OBJECT":
@@ -145,7 +137,7 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
         action[3:6] = 0 # Maintain orientation
 
         # Run environment step
-        env.step(action)
+        obs, _, _, _ = env.step(action)
         env.render()
 
         # Also break if we complete the task
