@@ -17,3 +17,4 @@ logs/
 libero.egg-info/
 .vscode/
 .env
+demonstration_data/
