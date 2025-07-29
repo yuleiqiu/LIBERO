@@ -65,10 +65,9 @@ def main():
     bddl_file_name = f["data"].attrs["bddl_file_name"]
 
     bddl_file_dir = os.path.dirname(bddl_file_name)
-    print(f"bddl_file_dir: {bddl_file_dir}")
     # replace_bddl_prefix = "/".join(bddl_file_dir.split("bddl_files/")[:-1] + "bddl_files")
 
-    hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_dir.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
+    hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_name.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
 
     output_parent_dir = Path(hdf5_path).parent
     output_parent_dir.mkdir(parents=True, exist_ok=True)
@@ -124,9 +123,8 @@ def main():
     cap_index = 5
 
     for (i, ep) in enumerate(demos):
-        print("Playing back random episode... (press ESC to quit)")
+        print("Playing back episode... (press ESC to quit)")
 
-        # # select an episode randomly
         # read the model xml, using the metadata stored in the attribute for this episode
         model_xml = f["data/{}".format(ep)].attrs["model_file"]
         reset_success = False
@@ -230,9 +228,9 @@ def main():
         dones[-1] = 1
         rewards = np.zeros(len(actions)).astype(np.uint8)
         rewards[-1] = 1
-        print(len(actions), len(agentview_images))
-        assert len(actions) == len(agentview_images)
-        print(len(actions))
+        # print(len(actions), len(agentview_images))
+        assert len(actions) == len(agentview_images), f"Length mismatch: {len(actions)} actions vs {len(agentview_images)} images"
+        # print(len(actions))
 
         ep_data_grp = grp.create_group(f"demo_{i}")
 
