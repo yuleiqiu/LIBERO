@@ -5,9 +5,8 @@ import imageio
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 
-benchmark_dict = benchmark.get_benchmark_dict(help=True)
-task_suite_name = "libero_object_random" # can also choose libero_spatial, libero_object, etc.
-task_suite = benchmark_dict[task_suite_name]()
+task_suite_name = "libero_object_grid" # can also choose libero_spatial, libero_object, etc.
+task_suite = benchmark.get_benchmark(task_suite_name)()
 
 # retrieve a specific task
 for task_id in range(task_suite.n_tasks):
@@ -18,26 +17,24 @@ for task_id in range(task_suite.n_tasks):
 
     env_args = {
         "bddl_file_name": task_bddl_file,
+        "camera_widths": 512,
+        "camera_heights": 512,
     }
     env = OffScreenRenderEnv(**env_args)
     env.reset()
 
     for _ in range(10):
-        env.step([0.] * 7)  # Don't advance physics, just get state
+        obs, _, _, _ = env.step([0.] * 7)  # Don't advance physics, just get state
 
     sim = env.env.sim
     model = sim.model
     data = sim.data
 
-    # # Print object names and poses
-    # for i in range(model.nbody):
-    #     print(f"Object: {model.body_id2name(i)}, Pose: {data.body_xpos[i]}")
-    
-    # exit(0)
-
-    # Hardcoded target and goal
-    target_object_name = "alphabet_soup_1_main"
-    destination_name = "basket_1_main"
+    obj_of_interest = env.env.obj_of_interest.copy()
+    # Remove 'basket_1' from the list of objects of interest
+    destination_name = obj_of_interest[1] + "_main"  # Assuming the second object is the destination
+    # obj_of_interest = [item for item in obj_of_interest if item != destination_name]
+    target_object_name = obj_of_interest[0] + "_main"  # Assuming the first object is the target
 
     target_object_id = model.body_name2id(target_object_name)
     destination_id = model.body_name2id(destination_name)
@@ -58,10 +55,8 @@ for task_id in range(task_suite.n_tasks):
     lift_start_pos = None
     noise_scale = 0.02 # Control the magnitude of the noise
 
-    for _ in range(600):
-        # Get current state
+    for _ in range(500):
         eef_pos = env.env._eef_xpos.copy()
-        eef_xmat = env.env._eef_xmat.copy()
         target_pos = data.body_xpos[target_object_id].copy()
         destination_pos = data.body_xpos[destination_id].copy()
 
@@ -71,9 +66,9 @@ for task_id in range(task_suite.n_tasks):
         action = np.zeros(7)
         # State machine logic
         if state == "MOVE_ABOVE_TARGET_OBJECT":
-            target_eef_pos = target_pos + np.array([0, 0, 0.15])
+            target_eef_pos = target_pos + np.array([0, 0, 0.25])
             target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
+            if np.linalg.norm(eef_pos - target_eef_pos) < 0.01:
                 state = "OPEN_GRIPPER"
                 continue
         elif state == "OPEN_GRIPPER":
@@ -86,8 +81,8 @@ for task_id in range(task_suite.n_tasks):
                 continue
         elif state == "LOWER_TO_TARGET_OBJECT":
             target_eef_pos = target_pos + np.array([0, 0, 0.01])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
+            # target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
+            if np.linalg.norm(eef_pos - target_eef_pos) < 0.01:
                 state = "GRASP_TARGET_OBJECT"
                 continue
         elif state == "GRASP_TARGET_OBJECT":
@@ -96,6 +91,7 @@ for task_id in range(task_suite.n_tasks):
                 grasp_timer += 1
             else:
                 grasp_timer = 0
+                # lift_start_pos = obs[f"{target_object_name}_pos"].copy()
                 lift_start_pos = data.body_xpos[target_object_id].copy()
                 state = "LIFT_TARGET_OBJECT"
                 continue
@@ -133,7 +129,7 @@ for task_id in range(task_suite.n_tasks):
 
         # Controller action
         error = target_eef_pos - eef_pos
-        action[:3] = error * 10
+        action[:3] = error * 5
         action[3:6] = 0 # Maintain orientation
 
         obs, _, success, _ = env.step(action)
