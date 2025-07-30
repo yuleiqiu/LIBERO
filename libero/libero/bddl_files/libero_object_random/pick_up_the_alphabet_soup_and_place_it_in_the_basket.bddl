@@ -5,14 +5,14 @@
       (bin_region
           (:target floor)
           (:ranges (
-              (-0.01 0.25 0.01 0.27)
+              (-0.01 0.29 0.01 0.31)
             )
           )
       )
       (workspace_region
           (:target floor)
           (:ranges (
-              (-0.4 -0.4 0.1 0.1)
+              (-0.2 -0.2 0.1 0.1)
             )
           )
       )
