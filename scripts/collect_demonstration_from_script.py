@@ -16,15 +16,80 @@ from robosuite.wrappers import DataCollectionWrapper, VisualizationWrapper
 import libero.libero.envs.bddl_utils as BDDLUtils
 from libero.libero.envs import *
 
+class BasePolicy:
+    def __init__(self, inject_noise=False):
+        self.inject_noise = inject_noise
+        self.step_count = 0
+        self.trajectory = None
 
-def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
+    def generate_trajectory(self, ts_first):
+        raise NotImplementedError
+
+    @staticmethod
+    def interpolate(curr_waypoint, next_waypoint, t):
+        t_frac = (t - curr_waypoint["t"]) / (next_waypoint["t"] - curr_waypoint["t"])
+        curr_xyz = curr_waypoint['xyz']
+        curr_grip = curr_waypoint['gripper']
+        next_xyz = next_waypoint['xyz']
+        next_grip = next_waypoint['gripper']
+        xyz = curr_xyz + (next_xyz - curr_xyz) * t_frac
+        gripper = curr_grip + (next_grip - curr_grip) * t_frac
+        return xyz, gripper
+
+    def __call__(self, target_pos, destination_pos, current_eef_pos):
+        # generate trajectory at first timestep, then open-loop execution
+        if self.step_count == 0:
+            self.generate_trajectory(target_pos, destination_pos)
+
+        # obtain waypoints
+        if self.trajectory[0]['t'] == self.step_count:
+            # print(self.trajectory)
+            self.curr_waypoint = self.trajectory.pop(0)
+        
+        # Check if trajectory is complete
+        if len(self.trajectory) == 0:
+            # Return zero delta (stay in place) and maintain last gripper state
+            xyz = np.zeros(3)
+            gripper = self.curr_waypoint['gripper']
+        else:
+            next_waypoint = self.trajectory[0]
+            # interpolate between waypoints to obtain current pose and gripper command
+            target_xyz, gripper = self.interpolate(self.curr_waypoint, next_waypoint, self.step_count)
+            # Inject noise
+            if self.inject_noise:
+                scale = 0.02
+                target_xyz += np.random.uniform(-scale, scale, target_xyz.shape)
+            # Calculate delta (dx, dy, dz) from current position to target position
+            xyz = target_xyz - current_eef_pos
+
+        # action = np.concatenate([xyz, [gripper]])
+
+        self.step_count += 1
+        return xyz, gripper
+
+class PickAndPlacePolicy(BasePolicy):
+    def generate_trajectory(self, target_pos, destination_pos):
+        self.trajectory = [
+            {"t": 0, "xyz": target_pos + np.array([0, 0, 0.2]), "gripper": -1}, # approach target object
+            # {"t": 90, "xyz": target_pos + np.array([0, 0, 0.15]), "gripper": -1}, # approach target object
+            {"t": 120, "xyz": target_pos + np.array([0, 0, -0.01]), "gripper": -1}, # go down
+            {"t": 170, "xyz": target_pos + np.array([0, 0, -0.01]), "gripper": 1}, # close gripper
+            {"t": 200, "xyz": target_pos + np.array([0, 0, 0.2]), "gripper": 1}, # move up
+            {"t": 250, "xyz": destination_pos + np.array([0, 0, 0.25]), "gripper": 1}, # move to basket
+            {"t": 320, "xyz": destination_pos + np.array([0, 0, 0.1]), "gripper": 1}, # go down
+            {"t": 370, "xyz": destination_pos + np.array([0, 0, 0.1]), "gripper": -1}, # open gripper
+            {"t": 380, "xyz": destination_pos + np.array([0, 0, 0.3]), "gripper": -1}, # move up
+            {"t": 400, "xyz": destination_pos + np.array([0, 0, 0.3]), "gripper": -1}, # stay
+        ]
+
+
+def collect_scripted_trajectory(env, remove_directory=[]):
     """
     Use a scripted policy to collect a demonstration.
     The rollout trajectory is saved to files in npz format.
     Modify the DataCollectionWrapper wrapper to add new fields or change data formats.
     Args:
         env (MujocoEnv): environment to control
-        problem_info (dict): dictionary containing with problem information
     """
 
     reset_success = False
@@ -35,109 +100,55 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
         except:
             continue
 
-    # ID = 2 always corresponds to agentview
     env.render()
 
     task_completion_hold_count = (
         -1
     )  # counter to collect 10 timesteps after reaching goal
 
+    # Retrieve target object and destination object names
     obj_of_interest = env.env.obj_of_interest.copy()
     target_object_name = obj_of_interest[0]
     destination_name = obj_of_interest[-1]
 
-    # Control loop
-    state = "MOVE_ABOVE_TARGET_OBJECT"
-    open_timer = 0
-    grasp_timer = 0
-    release_timer = 0
-    open_duration = 10  # Number of steps to keep gripper open
-    grasp_duration = 10  # Number of steps to keep gripper closed for grasping
-    release_duration = 10  # Number of steps to keep gripper open for releasing
+    # Get target and destination positions
+    target_pos = obs[f"{target_object_name.replace('_main', '')}_pos"].copy()
+    destination_pos = obs[f"{destination_name.replace('_main', '')}_pos"].copy()
+    # print(f"Target position: {target_pos}, Destination position: {destination_pos}")
 
-    lift_start_pos = None
-    noise_scale = 0.01 # Control the magnitude of the noise
+    policy = PickAndPlacePolicy(inject_noise=True)
 
+    success = False
     task_completed = False
-    for _ in range(500):
+    # continue_recording = True
+    # post_success_steps = 0
+    # post_success_duration = 40  # Continue recording for 40 steps after success
+
+
+    # current_eef_pos = obs["robot0_eef_pos"].copy()
+    # action = policy(target_pos, destination_pos, current_eef_pos)
+
+    for _ in range(400):
         # Get current state
-        eef_pos = obs["robot0_eef_pos"].copy()
-        target_pos = obs[f"{target_object_name.replace('_main', '')}_pos"].copy()
-        # print(f"Current state: {state}, EEF position: {eef_pos}, Target position: {target_pos}")
-        destination_pos = obs[f"{destination_name.replace('_main', '')}_pos"].copy()
+        current_eef_pos = obs["robot0_eef_pos"].copy()
 
-        # print(f"Current state: {state}, EEF position: {eef_pos}, Target position: {target_pos}, Destination position: {destination_pos}")
-
-        action = np.zeros(7)
-        # State machine logic
-        if state == "MOVE_ABOVE_TARGET_OBJECT":
-            target_eef_pos = target_pos + np.array([0, 0, 0.2])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                state = "OPEN_GRIPPER"
-                continue
-        elif state == "OPEN_GRIPPER":
-            action[-1] = -1  # Open gripper
-            if open_timer < open_duration:
-                open_timer += 1
-            else:
-                open_timer = 0
-                state = "LOWER_TO_TARGET_OBJECT"
-                continue
-        elif state == "LOWER_TO_TARGET_OBJECT":
-            target_eef_pos = target_pos + np.array([0, 0, 0.01])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                state = "GRASP_TARGET_OBJECT"
-                continue
-        elif state == "GRASP_TARGET_OBJECT":
-            action[-1] = 1  # Close gripper
-            if grasp_timer < grasp_duration:
-                grasp_timer += 1
-            else:
-                grasp_timer = 0
-                lift_start_pos = obs[f"{target_object_name}_pos"].copy()
-                state = "LIFT_TARGET_OBJECT"
-                continue
-        elif state == "LIFT_TARGET_OBJECT":
-            target_eef_pos = lift_start_pos + np.array([0, 0, 0.3])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                state = "MOVE_ABOVE_DESTINATION"
-                continue
-        elif state == "MOVE_ABOVE_DESTINATION":
-            target_eef_pos = destination_pos + np.array([0, 0, 0.3])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                state = "LOWER_TO_DESTINATION"
-                continue
-        elif state == "LOWER_TO_DESTINATION":
-            target_eef_pos = destination_pos + np.array([0, 0, 0.1])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                state = "RELEASE_TARGET_OBJECT"
-                continue
-        elif state == "RELEASE_TARGET_OBJECT":
-            action[-1] = -1  # Open gripper
-            if release_timer < release_duration:
-                release_timer += 1
-            else:
-                release_timer = 0
-                state = "RETREAT"
-                continue
-        elif state == "RETREAT":
-            target_eef_pos = eef_pos + np.array([0, 0, 0.3])
-            target_eef_pos += np.random.normal(0, noise_scale, size=target_eef_pos.shape)
-            if np.linalg.norm(eef_pos - target_eef_pos) < 0.02:
-                break
-
-        # Controller action
-        error = target_eef_pos - eef_pos
-        action[:3] = error * 10
-        action[3:6] = 0 # Maintain orientation
+        if not success:
+            # Get delta action from policy
+            xyz_delta, gripper = policy(target_pos, destination_pos, current_eef_pos)
+            
+            # Create full action vector (dx, dy, dz, rx, ry, rz, gripper)
+            action = np.zeros(7)
+            action[:3] = xyz_delta*5  # Position deltas
+            action[3:6] = 0  # Orientation deltas (maintain current orientation)
+            action[6] = gripper  # Gripper command
+        else:
+            # If success, move up and keep the action as zero to maintain position
+            action = np.zeros(7)
+            action[2] = 0.1  # Move up slightly
+            action[6] = -1  # Keep gripper open
 
         # Run environment step
-        obs, _, _, _ = env.step(action)
+        obs, _, success, _ = env.step(action)
         env.render()
 
         # Also break if we complete the task
@@ -145,12 +156,12 @@ def collect_scripted_trajectory(env, problem_info, remove_directory=[]):
             task_completed = True
             break
 
-        # state machine to check for having a success for 10 consecutive timesteps
-        if env._check_success():
+        # state machine to check for having a success for 40 consecutive timesteps
+        if success:
             if task_completion_hold_count > 0:
                 task_completion_hold_count -= 1  # latched state, decrement count
             else:
-                task_completion_hold_count = 10  # reset count on first success timestep
+                task_completion_hold_count = 40  # reset count on first success timestep
         else:
             task_completion_hold_count = -1  # null the counter if there's no success
     else:
@@ -294,7 +305,7 @@ if __name__ == "__main__":
         "--num-demonstration",
         type=int,
         default=10,
-        help="How much to scale rotation user inputs",
+        help="Number of demonstrations to collect",
     )
     parser.add_argument("--bddl-file", type=str)
 
@@ -311,7 +322,7 @@ if __name__ == "__main__":
 
     assert os.path.exists(args.bddl_file)
     problem_info = BDDLUtils.get_problem_info(args.bddl_file)
-    # Check if we're using a multi-armed environment and use env_configuration argument if so
+    task_name = args.bddl_file.split("/")[-1].split(".")[0]
 
     # Create environment
     problem_name = problem_info["problem_name"]
@@ -362,9 +373,9 @@ if __name__ == "__main__":
     remove_directory = []
     i = 0
     while i < args.num_demonstration:
-        print(i)
+        print(f"Collecting demonstration of task {task_name}: {i+1}/{args.num_demonstration}...")
         saving = collect_scripted_trajectory(
-            env, problem_info, remove_directory
+            env, remove_directory
         )
         if saving:
             gather_demonstrations_as_hdf5(
