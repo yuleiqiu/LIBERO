@@ -25,14 +25,29 @@ LANGUAGE_TEMPLATE = "Pick the alphabet soup and place it in the basket"
 OBJECTS_OF_INTEREST = ["alphabet_soup_1", "basket_1"]
 GOAL_STATES = [("In", "alphabet_soup_1", "basket_1_contain_region")]
 
-# Grid definition
-grid = np.linspace(-0.4, 0.1, 11)
 
-def generate_for_cell(i, j, interval_x, interval_y, output_base):
-    # Unique identifiers
-    scene_suffix = f"cell_{i}_{j}"
+def generate_for_cell_at_i_j(
+        i: int,
+        j: int,
+        x_ij: float,
+        y_ij: float,
+        output_base: str,
+):
+    """
+    Generate BDDL files for a specific cell defined by the grid indices i and j.
+    The cell is defined by the intervals [interval_x[0], interval_x[1]]
+    and [interval_y[0], interval_y[1]].
+
+    Args:
+        i (int): Row index of the cell in the grid.
+        j (int): Column index of the cell in the grid.
+        x_ij (float): x-coordinate of the cell center.
+        y_ij (float): y-coordinate of the cell center.
+        output_base (str): Base directory to save the generated BDDL files.
+    """
+    # Define the workspace name and scene suffix
     scene_type = "floor"
-    class_name = f"Cell_{i}_{j}"
+    class_name = f"cell_{i}_{j}"
     # 构建动态类方法
     def __init__(self):
         # 显式调用父类构造，避免 super() 在动态类型中失效
@@ -47,7 +62,7 @@ def generate_for_cell(i, j, interval_x, interval_y, output_base):
         # bin region
         self.regions.update(
             self.get_region_dict(
-                region_centroid_xy=[0, 0.26],
+                region_centroid_xy=[0, 0.30],
                 region_name="bin_region",
                 target_name=self.workspace_name,
                 region_half_len=0.01
@@ -65,15 +80,13 @@ def generate_for_cell(i, j, interval_x, interval_y, output_base):
         )
 
         # target object region for this cell
-        cx = float((interval_x[0] + interval_x[1]) / 2)
-        cy = float((interval_y[0] + interval_y[1]) / 2)
-        half_len = float((interval_x[1] - interval_x[0]) / 2)
+
         self.regions.update(
             self.get_region_dict(
-                region_centroid_xy=[cx, cy],
+                region_centroid_xy=[x_ij, y_ij],
                 region_name="target_object_region",
                 target_name=self.workspace_name,
-                region_half_len=half_len
+                region_half_len=0.01
             )
         )
 
@@ -98,10 +111,6 @@ def generate_for_cell(i, j, interval_x, interval_y, output_base):
     })
     register_mu(scene_type=scene_type)(DynamicScene)
 
-    # from libero.libero.utils.mu_utils import MU_DICT
-    # for k,v in MU_DICT.items():
-    #     print(f"Registered scene: {k} -> {v.__name__}")
-
     register_task_info(
         LANGUAGE_TEMPLATE,
         scene_name=f"cell_{i}_{j}",
@@ -118,13 +127,18 @@ def generate_for_cell(i, j, interval_x, interval_y, output_base):
 
 
 def main():
+    # Grid definition
+    Nx = Ny = 10
+    x = np.linspace(-0.4, 0.1, Nx)
+    y = np.linspace(-0.4, 0.1, Ny)
+    X, Y = np.meshgrid(x, y)
+    # points = np.column_stack([X.ravel(), Y.ravel()])
+
     output_base = "tmp/pddl_files/sparse_grid"
-    for i in range(len(grid) - 1):
-        for j in range(len(grid) - 1):
-            interval_x = [grid[i], grid[i + 1]]
-            interval_y = [grid[j], grid[j + 1]]
-            names, fails = generate_for_cell(i, j, interval_x, interval_y, output_base)
-            print(f"Cell ({i},{j}): Generated files: {names}, Failures: {fails}")
+    for i in range(len(X)):
+        for j in range(len(Y)):
+            names, fails = generate_for_cell_at_i_j(i, j, float(X[i,j]), float(Y[i,j]), output_base)
+            print(f"Cell ({i},{j}) done.")
         #     break
         # break
 

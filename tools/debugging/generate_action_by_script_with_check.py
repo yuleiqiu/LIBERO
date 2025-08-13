@@ -113,7 +113,6 @@ for task_id in range(task_suite.n_tasks):
     # env.env._gripper_to_target(
     #     gripper=env.env.robots[0].gripper, target=env.env.cube.root_body, target_type="body"
     # )
-    # self._gripper_to_target(
     # dist = self._gripper_to_target(
     #     gripper=self.robots[0].gripper, target=self.cube.root_body, target_type="body", return_distance=True
     # )
