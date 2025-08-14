@@ -60,7 +60,6 @@ class PickAndPlacePolicy(BasePolicy):
     def generate_trajectory(self, target_pos, destination_pos):
         self.trajectory = [
             {"t": 0, "xyz": target_pos + np.array([0, 0, 0.2]), "gripper": -1}, # approach target object
-            # {"t": 90, "xyz": target_pos + np.array([0, 0, 0.15]), "gripper": -1}, # approach target object
             {"t": 130, "xyz": target_pos + np.array([0, 0, -0.01]), "gripper": -1}, # go down
             {"t": 170, "xyz": target_pos + np.array([0, 0, -0.01]), "gripper": 1}, # close gripper
             {"t": 200, "xyz": target_pos + np.array([0, 0, 0.2]), "gripper": 1}, # move up

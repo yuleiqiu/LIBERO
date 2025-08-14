@@ -18,8 +18,8 @@ OBJECT_NUM_INFO = {
     "salad_dressing": 1,
     "cream_cheese": 1,
     "milk": 1,
-    "tomato_sauce": 1,
-    "butter": 1,
+    # "tomato_sauce": 1,
+    # "butter": 1,
 }
 LANGUAGE_TEMPLATE = "Pick the alphabet soup and place it in the basket"
 OBJECTS_OF_INTEREST = ["alphabet_soup_1", "basket_1"]
@@ -80,7 +80,6 @@ def generate_for_cell_at_i_j(
         )
 
         # target object region for this cell
-
         self.regions.update(
             self.get_region_dict(
                 region_centroid_xy=[x_ij, y_ij],
@@ -98,8 +97,8 @@ def generate_for_cell_at_i_j(
             ("On", "salad_dressing_1", "floor_workspace_region"),
             ("On", "cream_cheese_1", "floor_workspace_region"),
             ("On", "milk_1", "floor_workspace_region"),
-            ("On", "tomato_sauce_1", "floor_workspace_region"),
-            ("On", "butter_1", "floor_workspace_region"),
+            # ("On", "tomato_sauce_1", "floor_workspace_region"),
+            # ("On", "butter_1", "floor_workspace_region"),
             ("On", "basket_1", "floor_bin_region"),
         ]
         return states
@@ -129,8 +128,8 @@ def generate_for_cell_at_i_j(
 def main():
     # Grid definition
     Nx = Ny = 10
-    x = np.linspace(-0.4, 0.1, Nx)
-    y = np.linspace(-0.4, 0.1, Ny)
+    x = np.linspace(-0.35, 0.1, Nx)
+    y = np.linspace(-0.35, 0.1, Ny)
     X, Y = np.meshgrid(x, y)
     # points = np.column_stack([X.ravel(), Y.ravel()])
 
