@@ -19,31 +19,52 @@ from libero.libero import get_libero_path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--demo-file", default="demo.hdf5")
 
     parser.add_argument(
-        "--use-actions",
+        "--demo-file",
+        type=str,
+        default="demo.hdf5",
+        help="Path the raw demo hdf5 file to be processed",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        help="Directory to save the output dataset in hdf5 format",
+    )
+
+    # parser.add_argument(
+    #     "--use-actions",
+    #     action="store_true",
+    # ) # NOT USED
+
+    parser.add_argument(
+        "--use-camera-obs",
         action="store_true",
     )
-    parser.add_argument("--use-camera-obs", action="store_true")
-    parser.add_argument(
-        "--dataset-path",
-        type=str,
-        default="datasets/",
-    )
 
     parser.add_argument(
-        "--dataset-name",
-        type=str,
-        default="training_set",
+        "--no-proprio",
+        action="store_true"
     )
-
-    parser.add_argument("--no-proprio", action="store_true")
 
     parser.add_argument(
         "--use-depth",
         action="store_true",
     )
+
+    # parser.add_argument(
+    #     "--dataset-path",
+    #     type=str,
+    #     default="datasets/",
+    # ) # NOT USED
+
+    # parser.add_argument(
+    #     "--dataset-name",
+    #     type=str,
+    #     default="training_set",
+    # ) # NOT USED
 
     args = parser.parse_args()
 
@@ -64,17 +85,20 @@ def main():
 
     bddl_file_name = f["data"].attrs["bddl_file_name"]
 
-    bddl_file_dir = os.path.dirname(bddl_file_name)
+    # bddl_file_dir = os.path.dirname(bddl_file_name)
     # replace_bddl_prefix = "/".join(bddl_file_dir.split("bddl_files/")[:-1] + "bddl_files")
 
-    hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_name.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
+    if not args.output_dir:
+        output_dir = os.path.join(get_libero_path("datasets"), bddl_file_name.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
+    else:
+        output_dir = args.output_dir
 
-    output_parent_dir = Path(hdf5_path).parent
+    output_parent_dir = Path(output_dir).parent
     output_parent_dir.mkdir(parents=True, exist_ok=True)
 
-    h5py_f = h5py.File(hdf5_path, "w")
+    hdf5_output = h5py.File(output_dir, "w")
 
-    grp = h5py_f.create_group("data")
+    grp = hdf5_output.create_group("data")
 
     grp.attrs["env_name"] = env_name
     grp.attrs["problem_info"] = f["data"].attrs["problem_info"]
@@ -270,11 +294,11 @@ def main():
     grp.attrs["total"] = total_len
     env.close()
 
-    h5py_f.close()
+    hdf5_output.close()
     f.close()
 
     print("The created dataset is saved in the following path: ")
-    print(hdf5_path)
+    print(output_dir)
 
 
 if __name__ == "__main__":

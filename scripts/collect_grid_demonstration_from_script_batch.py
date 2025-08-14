@@ -406,7 +406,7 @@ if __name__ == "__main__":
             saving = collect_scripted_trajectory(env, remove_directory)
             if saving:
                 gather_demonstrations_as_hdf5(
-                    tmp_directory, new_dir, env_info, args, remove_directory
+                    tmp_directory, new_dir, env_info, problem_info, bddl_file, remove_directory
                 )
                 i += 1
                 timeout_count = 0  # Reset timeout count on successful collection
