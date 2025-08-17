@@ -35,11 +35,15 @@ def main():
         "camera_widths": 512,
     }
     env = OffScreenRenderEnv(**env_args)
-    obs = env.reset()
-    
-    import pprint
+    # obs = env.reset()
+
+    objects_dict = env.env.objects_dict
+    for key, obj in objects_dict.items():
+        print(f"Object Name: {key}")
+
+    # import pprint
     # pprint.pprint(env.env.__dict__)
-    pprint.pprint(env.env.placement_initializer.__dict__)
+    # pprint.pprint(env.env.placement_initializer.__dict__)
     # pprint.pprint(list(obs.keys()))
     # pprint.pprint(obs["butter_1_to_robot0_eef_pos"])
     # pprint.pprint(env.env.robots[0].gripper.__dict__)

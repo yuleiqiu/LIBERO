@@ -615,8 +615,8 @@ class BDDLBaseDomain(SingleArmEnv):
                     )
                     self.placement_initializer.append_sampler(fixture_sampler)
                 else:
-                    # print(f"Unknown object type for {object_name}")
                     # This is to place movable objects.
+                    # Usually object are initialized here.
                     region_sampler = get_region_samplers(
                         problem_name, mapping_inv[target_name]
                     )(
