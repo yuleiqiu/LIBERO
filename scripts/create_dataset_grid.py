@@ -1,19 +1,14 @@
 import argparse
+import h5py
+import json
+import numpy as np
 import os
 from pathlib import Path
-import h5py
-import numpy as np
-import json
-import robosuite
 import robosuite.utils.transform_utils as T
 import robosuite.macros as macros
+import tqdm
 
-import init_path
 import libero.libero.utils.utils as libero_utils
-import cv2
-from PIL import Image
-from robosuite.utils import camera_utils
-
 from libero.libero.envs import *
 from libero.libero import get_libero_path
 
@@ -78,16 +73,9 @@ def main():
     problem_info = json.loads(f["data"].attrs["problem_info"])
     problem_info["domain_name"]
     problem_name = problem_info["problem_name"]
-    language_instruction = problem_info["language_instruction"]
-
-    # list of all demonstrations episodes
-    demos = list(f["data"].keys())
+    # language_instruction = problem_info["language_instruction"] # NOT USED
 
     bddl_file_name = f["data"].attrs["bddl_file_name"]
-
-    # bddl_file_dir = os.path.dirname(bddl_file_name)
-    # replace_bddl_prefix = "/".join(bddl_file_dir.split("bddl_files/")[:-1] + "bddl_files")
-
     if not args.output_dir:
         output_dir = os.path.join(get_libero_path("datasets"), bddl_file_name.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
     else:
@@ -141,12 +129,13 @@ def main():
 
     grp.attrs["env_args"] = json.dumps(env_args)
     print(grp.attrs["env_args"])
-    total_len = 0
-    demos = demos
 
+    total_len = 0
     cap_index = 5
 
-    for (i, ep) in enumerate(demos):
+    demos = list(f["data"].keys())
+    # for (i, ep) in enumerate(demos):
+    for i, ep in tqdm.tqdm(enumerate(demos), total=len(demos), desc="Processing episodes"):
         print("Playing back episode... (press ESC to quit)")
 
         # read the model xml, using the metadata stored in the attribute for this episode
@@ -299,6 +288,7 @@ def main():
 
     print("The created dataset is saved in the following path: ")
     print(output_dir)
+    print("\n")
 
 
 if __name__ == "__main__":
