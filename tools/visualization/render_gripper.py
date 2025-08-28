@@ -35,27 +35,16 @@ def main():
         "camera_widths": 512,
     }
     env = OffScreenRenderEnv(**env_args)
-    # obs = env.reset()
-
-    objects_dict = env.env.objects_dict
-    for key, obj in objects_dict.items():
-        print(f"Object Name: {key}")
-
+    for _ in range(10):
+        obs, _, _, _ = env.step([0.] * 7)  # Don't advance physics significantly, just allow settling
     # import pprint
-    # pprint.pprint(env.env.__dict__)
-    # pprint.pprint(env.env.placement_initializer.__dict__)
-    # pprint.pprint(list(obs.keys()))
-    # pprint.pprint(obs["butter_1_to_robot0_eef_pos"])
-    # pprint.pprint(env.env.robots[0].gripper.__dict__)
+    # pprint.pprint(env.env.robots[0].__dict__)
 
-    # frames = [obs[f"{args.camera_name}_image"][::-1].copy()]
-    # for _ in range(10):
-    #     obs, _, _, _ = env.step([0.] * 7)  # Don't advance physics, just get state
-    #     frames.append(obs[f"{args.camera_name}_image"][::-1].copy())
-
-    # # Save the final image
-    # imageio.mimwrite(args.output_path, frames, fps=24)
-    # print(f"Visualization saved to {args.output_path}")
+    # for k, v in obs.items():
+    #     print(f"{k}: {v}")
+    image = obs["agentview_image"][::-1]
+    imageio.imwrite("agentview_image.png", image)
+    print(obs["basket_1_pos"])
     
     env.close()
 

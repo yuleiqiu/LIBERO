@@ -17,4 +17,7 @@ plt.xlabel('x')
 plt.ylabel('y')
 plt.title('Structured Grid Sampling in [-0.4, 0.1] x [-0.4, 0.1]')
 plt.grid(True)
-plt.show()
+# plt.show()
+
+# Save the figure
+plt.savefig('structured_grid_sampling.png')
