@@ -134,10 +134,9 @@ def main():
     cap_index = 5
 
     demos = list(f["data"].keys())
-    # for (i, ep) in enumerate(demos):
-    for i, ep in tqdm.tqdm(enumerate(demos), total=len(demos), desc="Processing episodes"):
-        print("Playing back episode... (press ESC to quit)")
 
+    print("\nPlaying back episode... (press ESC to quit)")
+    for i, ep in tqdm.tqdm(enumerate(demos), total=len(demos), desc="Processing episodes"):
         # read the model xml, using the metadata stored in the attribute for this episode
         model_xml = f["data/{}".format(ep)].attrs["model_file"]
         reset_success = False
@@ -224,7 +223,6 @@ def main():
             robot_states.append(env.get_robot_state_vector(obs))
 
             if args.use_camera_obs:
-
                 if args.use_depth:
                     agentview_depths.append(obs["agentview_depth"])
                     eye_in_hand_depths.append(obs["robot0_eye_in_hand_depth"])
