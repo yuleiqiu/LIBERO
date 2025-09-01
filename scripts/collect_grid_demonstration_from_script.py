@@ -39,13 +39,11 @@ class BasePolicy:
             self.generate_trajectory(target_pos, destination_pos)
 
         # obtain waypoints
-        if self.trajectory[0]['t'] == self.step_count:
-            # print(self.trajectory)
+        if len(self.trajectory) > 0 and self.trajectory[0]['t'] == self.step_count:
             self.curr_waypoint = self.trajectory.pop(0)
-        
-        # Check if trajectory is complete
+
+        # if trajectory is exhausted, stay still
         if len(self.trajectory) == 0:
-            # Return zero delta (stay in place) and maintain last gripper state
             xyz = np.zeros(3)
             gripper = self.curr_waypoint['gripper']
         else:
@@ -58,8 +56,6 @@ class BasePolicy:
                 target_xyz += np.random.uniform(-scale, scale, target_xyz.shape)
             # Calculate delta (dx, dy, dz) from current position to target position
             xyz = target_xyz - current_eef_pos
-
-        # action = np.concatenate([xyz, [gripper]])
 
         self.step_count += 1
         return xyz, gripper
@@ -96,7 +92,7 @@ def collect_scripted_trajectory(env, remove_directory=[]):
             reset_success = True
         except:
             continue
-    env.render()
+    # env.render()
 
     # Retrieve target object and destination object names
     obj_of_interest = env.env.obj_of_interest.copy()
@@ -113,7 +109,7 @@ def collect_scripted_trajectory(env, remove_directory=[]):
     task_completion_hold_count = -1  # counter to collect 40 timesteps after reaching goal
     task_completed = False
 
-    for _ in range(400):
+    for _ in range(500): # this is task.horizon
         # Get current state
         current_eef_pos = obs["robot0_eef_pos"].copy()
 
@@ -134,7 +130,7 @@ def collect_scripted_trajectory(env, remove_directory=[]):
 
         # Run environment step
         obs, _, success, _ = env.step(action)
-        env.render()
+        # env.render()
 
         # Also break if we complete the task
         if task_completion_hold_count == 0:
