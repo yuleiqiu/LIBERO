@@ -6,19 +6,10 @@ import argparse
 import pprint
 
 # Third-party imports
-import numpy as np
-import torch
-import torchvision
-import matplotlib.pyplot as plt
-from PIL import Image
-from termcolor import colored
 import h5py
-import imageio
 
 # LIBERO-specific imports
 from libero.libero import benchmark, get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
-from libero.libero.utils.dataset_utils import get_dataset_info
 
 def main():
     pp = pprint.PrettyPrinter(indent=2)
@@ -61,20 +52,6 @@ def main():
             print(f"Demo {demo_id} has {len(actions)} actions")
             gripper_actions = actions[:, -1]
             print(f"Gripper actions for demo {demo_id}: {gripper_actions}")
-
-            # # 1. 找到第一个1出现的位置
-            # ones = np.where(gripper_actions == 1)[0]
-            # start_idx = ones[0]
-            # # 2. 找到start_idx之后第一个-1的位置
-            # minus_ones = np.where((gripper_actions == -1) & (np.arange(len(gripper_actions)) > start_idx))[0]
-            # end_idx = minus_ones[0] if len(minus_ones) > 0 else len(gripper_actions)
-            # # 3. start_idx到end_idx之间的0变为1
-            # gripper_actions[start_idx:end_idx][gripper_actions[start_idx:end_idx] == 0] = 1
-            # # 4. start_idx之前全部设为-1
-            # gripper_actions[:start_idx] = -1
-
-            # actions[:, -1] = gripper_actions
-            # f[f"data/{demo_key}/actions"][...] = actions  # 写回文件
 
 if __name__ == "__main__":
     main()
