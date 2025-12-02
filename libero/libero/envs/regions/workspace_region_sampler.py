@@ -17,6 +17,8 @@ class TableRegionSampler(MultiRegionRandomSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.01,
+        sampling_strategy="random",
+        per_range_quota=1,
     ):
         name = f"table-middle-{object_name}"
         super().__init__(
@@ -30,6 +32,8 @@ class TableRegionSampler(MultiRegionRandomSampler):
             ensure_valid_placement,
             reference_pos,
             z_offset,
+            sampling_strategy=sampling_strategy,
+            per_range_quota=per_range_quota,
         )
 
     def _sample_quat(self):
@@ -107,6 +111,8 @@ class Libero100TableRegionSampler(MultiRegionRandomSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.01,
+        sampling_strategy="random",
+        per_range_quota=1,
     ):
         name = f"table-middle-{object_name}"
         super().__init__(
@@ -120,6 +126,8 @@ class Libero100TableRegionSampler(MultiRegionRandomSampler):
             ensure_valid_placement,
             reference_pos,
             z_offset,
+            sampling_strategy=sampling_strategy,
+            per_range_quota=per_range_quota,
         )
 
     def _sample_quat(self):
@@ -197,6 +205,8 @@ class ObjectBasedSampler(MultiRegionRandomSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.01,
+        sampling_strategy="random",
+        per_range_quota=1,
     ):
         name = f"table-middle-{object_name}"
         super().__init__(
@@ -210,6 +220,8 @@ class ObjectBasedSampler(MultiRegionRandomSampler):
             ensure_valid_placement,
             reference_pos,
             z_offset,
+            sampling_strategy=sampling_strategy,
+            per_range_quota=per_range_quota,
         )
 
     def _sample_quat(self):

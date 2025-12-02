@@ -1,7 +1,6 @@
 import argparse
 import datetime
 import h5py
-import init_path
 import json
 import numpy as np
 import os
@@ -136,158 +135,6 @@ def random_lateral_offset(start_pos, goal_pos, max_offset=0.08):
     return np.array([lateral_dir[0] * magnitude, lateral_dir[1] * magnitude, 0.0])
 
 
-class RandomizedPickAndPlacePolicy(BasePolicy):
-    """
-    Pick-place policy that samples mid-waypoints and timing so the trajectory family is multi-modal.
-    """
-
-    def __init__(self, inject_noise=True, lock_keypoints=True):
-        super().__init__(inject_noise, debug=os.environ.get("DEBUG_TRAJ", "0") == "1")
-        # Raise hover heights to avoid staying too close to the object.
-        self.hover_range = (0.22, 0.30)
-        self.transfer_height_range = (0.26, 0.38)
-        self.lock_keypoints = lock_keypoints
-        # If we want key nodes not to drift, disable lateral offsets.
-        self.max_lateral_offset = 0.0 if self.lock_keypoints else 0.07
-        # Lean timing windows (controller steps) to avoid停在物体上方太久.
-        self.dt_approach = (60, 80)
-        # Close almost立即: keep预抓窗口很小.
-        self.dt_pregrasp = (30, 50)
-        self.dt_lift = (12, 28)
-        self.dt_transfer = (25, 55)
-        # Hover over basket before descending to avoid early drop.
-        self.dt_preplace_hover = (12, 22)
-        self.dt_place = (12, 28)
-        self.dt_release = (5, 10)
-        self.dt_retreat = (18, 32)
-        # Hold durations to let gripper actually close on the object.
-        self.dt_grasp_hold = (12, 20)
-        # Optional open hold at grasp depth before closing to satisfy "hover then close".
-        self.dt_grasp_hover = (4, 8)
-
-    def _dt(self, low, high):
-        return int(np.random.randint(low, high))
-
-    def _transfer_midpoints(self, start, goal):
-        """
-        Build 0/1/2 mid-waypoints with different arc styles to induce multi-modal paths.
-        """
-        mode = np.random.choice(["direct", "arc", "double_arc"])
-        midpoints = []
-        if self.max_lateral_offset <= 1e-6:
-            # Force straight-line midpoints when locking keypoints.
-            mode = "direct"
-        if mode == "direct":
-            center = (start + goal) / 2.0
-            center[2] = np.random.uniform(*self.transfer_height_range)
-            midpoints.append(center)
-        elif mode == "arc":
-            offset = random_lateral_offset(start, goal, self.max_lateral_offset)
-            center = (start + goal) / 2.0 + offset
-            center[2] = np.random.uniform(*self.transfer_height_range)
-            midpoints.append(center)
-        else:  # double_arc
-            offset1 = random_lateral_offset(start, goal, self.max_lateral_offset)
-            offset2 = random_lateral_offset(goal, start, self.max_lateral_offset)
-            mid1 = start + 0.35 * (goal - start) + offset1
-            mid2 = start + 0.7 * (goal - start) + offset2
-            mid1[2] = np.random.uniform(*self.transfer_height_range)
-            mid2[2] = np.random.uniform(*self.transfer_height_range)
-            midpoints.extend([mid1, mid2])
-        return midpoints
-
-    def generate_trajectory(self, target_pos, destination_pos):
-        waypoints = []
-        t = 0
-
-        def add_wp(pos, grip, dt):
-            nonlocal t
-            if len(waypoints) == 0:
-                # allow first waypoint at t=0
-                dt_eff = 0
-            else:
-                dt_eff = max(1, int(dt))
-            waypoints.append({"t": t, "xyz": pos, "gripper": grip})
-            t += dt_eff
-
-        hover_pick = np.random.uniform(*self.hover_range)
-        pre_grasp_height = np.random.uniform(0.06, 0.10)
-        grasp_depth = np.random.uniform(-0.025, -0.010)
-        post_grasp_lift = np.random.uniform(0.16, 0.20)
-
-        hover_place = np.random.uniform(*self.hover_range)
-        # Keep higher above the basket; avoid early deep descent.
-        place_depth = np.random.uniform(0.04, 0.09)
-        retreat_height = np.random.uniform(0.22, 0.32)
-
-        # Approach and grasp
-        add_wp(target_pos + np.array([0, 0, hover_pick]), -1, 0)
-        add_wp(
-            target_pos + np.array([0, 0, pre_grasp_height]),
-            -1,
-            self._dt(*self.dt_approach),
-        )
-        # Hover at grasp plane while still open.
-        add_wp(
-            target_pos + np.array([0, 0, grasp_depth]),
-            -1,
-            self._dt(*self.dt_grasp_hover),
-        )
-        add_wp(
-            target_pos + np.array([0, 0, grasp_depth]),
-            1,
-            self._dt(*self.dt_pregrasp),
-        )
-        # Hold at grasp depth to let gripper close.
-        add_wp(
-            target_pos + np.array([0, 0, grasp_depth]),
-            1,
-            self._dt(*self.dt_grasp_hold),
-        )
-        add_wp(
-            target_pos + np.array([0, 0, post_grasp_lift]),
-            1,
-            self._dt(*self.dt_lift),
-        )
-
-        # Transfer with sampled arcs
-        transfer_start = target_pos + np.array([0, 0, post_grasp_lift])
-        transfer_goal = destination_pos + np.array([0, 0, hover_place])
-        for mid in self._transfer_midpoints(transfer_start, transfer_goal):
-            add_wp(mid, 1, self._dt(*self.dt_transfer))
-        add_wp(transfer_goal, 1, self._dt(*self.dt_transfer))
-        # Hold over basket at hover height before descending.
-        add_wp(
-            transfer_goal,
-            1,
-            self._dt(*self.dt_preplace_hover),
-        )
-
-        # Place and retreat
-        add_wp(
-            destination_pos + np.array([0, 0, place_depth]),
-            1,
-            self._dt(*self.dt_place),
-        )
-        add_wp(
-            destination_pos + np.array([0, 0, place_depth]),
-            -1,
-            self._dt(*self.dt_release),
-        )
-        add_wp(
-            destination_pos + np.array([0, 0, retreat_height]),
-            -1,
-            self._dt(*self.dt_retreat),
-        )
-        add_wp(
-            destination_pos + np.array([0, 0, retreat_height]),
-            -1,
-            self._dt(8, 16),
-        )
-
-        self.trajectory = waypoints
-
-
 class FixedPickAndPlacePolicy(BasePolicy):
     """
     Deterministic pick-and-place trajectory (mirrors the original _from_script behavior)
@@ -300,8 +147,8 @@ class FixedPickAndPlacePolicy(BasePolicy):
     def generate_trajectory(self, target_pos, destination_pos):
         self.trajectory = [
             {"t": 0, "xyz": target_pos + np.array([0, 0, 0.3]), "gripper": -1},
-            {"t": 200, "xyz": target_pos + np.array([0, 0, 0]), "gripper": -1},
-            {"t": 300, "xyz": target_pos + np.array([0, 0, 0]), "gripper": 1},
+            {"t": 200, "xyz": target_pos + np.array([0, 0, 0.04]), "gripper": -1},
+            {"t": 300, "xyz": target_pos + np.array([0, 0, 0.04]), "gripper": 1},
             {"t": 380, "xyz": target_pos + np.array([0, 0, 0.2]), "gripper": 1},
             {"t": 470, "xyz": destination_pos + np.array([0, 0, 0.25]), "gripper": 1},
             {"t": 540, "xyz": destination_pos + np.array([0, 0, 0.1]), "gripper": 1},
@@ -309,6 +156,98 @@ class FixedPickAndPlacePolicy(BasePolicy):
             {"t": 590, "xyz": destination_pos + np.array([0, 0, 0.3]), "gripper": -1},
             {"t": 600, "xyz": destination_pos + np.array([0, 0, 0.3]), "gripper": -1},
         ]
+
+class RandomizedPickAndPlacePolicy(BasePolicy):
+    """
+    Same keyframes as FixedPickAndPlacePolicy, but injects random mid-waypoints in transfer
+    and approach while always passing through target_pos and destination_pos.
+    """
+
+    def __init__(self, inject_noise=False, transfer_offset_max=0.06, approach_offset_max=0.06):
+        super().__init__(inject_noise, debug=os.environ.get("DEBUG_TRAJ", "0") == "1")
+        self.transfer_offset_max = transfer_offset_max
+        self.approach_offset_max = approach_offset_max
+        self.transfer_height_range = (0.22, 0.36)
+        self.approach_height_range = (0.18, 0.30)
+
+    def _midpoints(self, start, goal, offset_max, height_range):
+        """
+        Insert 0/1/2 mid-waypoints between lift and destination hover to induce path variety.
+        XY offsets are perpendicular to straight line; Z is lifted to avoid collision.
+        """
+        mode = np.random.choice(["direct", "arc", "double_arc"])
+        mids = []
+        if mode == "arc":
+            offset = random_lateral_offset(start, goal, offset_max)
+            mid = (start + goal) / 2.0 + offset
+            mid[2] = np.random.uniform(*height_range)
+            mids.append(mid)
+        elif mode == "double_arc":
+            offset1 = random_lateral_offset(start, goal, offset_max)
+            offset2 = random_lateral_offset(goal, start, offset_max)
+            mid1 = start + 0.35 * (goal - start) + offset1
+            mid2 = start + 0.7 * (goal - start) + offset2
+            mid1[2] = np.random.uniform(*height_range)
+            mid2[2] = np.random.uniform(*height_range)
+            mids.extend([mid1, mid2])
+        # "direct" -> no mids
+        return mids
+
+    def _transfer_midpoints(self, start, goal):
+        return self._midpoints(start, goal, self.transfer_offset_max, self.transfer_height_range)
+
+    def _approach_midpoints(self, start, goal):
+        return self._midpoints(start, goal, self.approach_offset_max, self.approach_height_range)
+
+    def generate_trajectory(self, target_pos, destination_pos):
+        def maybe_jitter(z, scale=0.005):
+            if not self.inject_noise:
+                return z
+            return z + np.random.uniform(-scale, scale)
+
+        waypoints = []
+
+        def add_abs(t, pos, grip):
+            waypoints.append({"t": t, "xyz": pos, "gripper": grip})
+
+        # Keyframes (absolute timesteps) through target_pos / destination_pos
+        start_hover = target_pos + np.array([0, 0, maybe_jitter(0.3)])
+        approach_goal = target_pos + np.array([0, 0, maybe_jitter(0.05)])
+        add_abs(0, start_hover, -1)
+        approach_mids = self._approach_midpoints(start_hover, approach_goal)
+        if approach_mids:
+            approach_times = np.linspace(20, 180, num=len(approach_mids) + 2)[1:-1]
+            for at, ap in zip(approach_times, approach_mids):
+                add_abs(int(at), ap, -1)
+        add_abs(200, approach_goal, -1)
+        add_abs(300, target_pos + np.array([0, 0, maybe_jitter(0.05)]), 1)
+        add_abs(380, target_pos + np.array([0, 0, maybe_jitter(0.2)]), 1)
+
+        transfer_start_t = 380
+        transfer_end_t = 470
+        transfer_start = target_pos + np.array([0, 0, maybe_jitter(0.2)])
+        transfer_goal = destination_pos + np.array([0, 0, maybe_jitter(0.25)])
+        mids = self._transfer_midpoints(transfer_start, transfer_goal)
+        if mids:
+            mid_times = np.linspace(transfer_start_t + 10, transfer_end_t - 10, num=len(mids) + 2)[1:-1]
+            for mt, mp in zip(mid_times, mids):
+                add_abs(int(mt), mp, 1)
+        add_abs(transfer_end_t, transfer_goal, 1)
+
+        add_abs(540, destination_pos + np.array([0, 0, maybe_jitter(0.1)]), 1)
+        add_abs(570, destination_pos + np.array([0, 0, maybe_jitter(0.1)]), -1)
+        add_abs(590, destination_pos + np.array([0, 0, maybe_jitter(0.3)]), -1)
+        add_abs(600, destination_pos + np.array([0, 0, maybe_jitter(0.3)]), -1)
+
+        # Ensure strict time increase
+        waypoints.sort(key=lambda w: w["t"])
+        last_t = -1
+        for wp in waypoints:
+            if wp["t"] <= last_t:
+                wp["t"] = last_t + 1
+            last_t = wp["t"]
+
+        self.trajectory = waypoints
 
 
 def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], debug=False):
@@ -330,23 +269,26 @@ def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], 
     target_pos = obs[f"{target_object_name.replace('_main', '')}_pos"].copy()
     destination_pos = obs[f"{destination_name.replace('_main', '')}_pos"].copy()
 
-    # Use deterministic policy matching the working _from_script trajectory; no noise.
-    policy = FixedPickAndPlacePolicy()
-    # policy = RandomizedPickAndPlacePolicy(inject_noise=True, lock_keypoints=False)
+    # Use deterministic policy matching the working _from_script trajectory; no noise by default.
+    policy = RandomizedPickAndPlacePolicy(inject_noise=True)
     if debug:
         policy.debug = True
 
     success = False
     task_completed = False
     task_completion_hold_count = -1
+    fail_reason = None
 
-    for _ in range(600):
+    # Allow extra steps beyond the scripted horizon to reach goal;
+    # Abort early if trajectory ends without success.
+    max_steps = 750
+    for _ in range(max_steps):
         current_eef_pos = obs["robot0_eef_pos"].copy()
 
         if not success:
             xyz_delta, gripper = policy(target_pos, destination_pos, current_eef_pos)
             action = np.zeros(7)
-            action[:3] = xyz_delta * 1.5
+            action[:3] = xyz_delta * 3
             action[3:6] = 0
             action[6] = gripper
         else:
@@ -356,6 +298,10 @@ def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], 
 
         obs, _, success, _ = env.step(action)
         env.render()
+
+        if not success and getattr(policy, "trajectory", []) == []:
+            fail_reason = "trajectory_exhausted"
+            break
 
         if task_completion_hold_count == 0:
             task_completed = True
@@ -369,9 +315,13 @@ def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], 
         else:
             task_completion_hold_count = -1
     else:
-        print("Trajectory collection timed out, retrying...")
+        fail_reason = "timeout"
 
     if not task_completed:
+        if fail_reason:
+            print(f"Episode failed due to {fail_reason}, retrying...")
+        else:
+            print("Episode failed (unknown reason), retrying...")
         remove_directory.append(env.ep_directory.split("/")[-1])
         env.close()
         return None, False
@@ -385,7 +335,7 @@ def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], 
 
 
 def gather_demonstrations_as_hdf5(
-    directory, out_dir, env_info, args, remove_directory=[]
+    directory, out_dir, env_info, args, remove_directory=[], anchor_idx=None
 ):
     hdf5_path = os.path.join(out_dir, "demo.hdf5")
     f = h5py.File(hdf5_path, "w")
@@ -426,6 +376,8 @@ def gather_demonstrations_as_hdf5(
 
         ep_data_grp.create_dataset("states", data=np.array(states))
         ep_data_grp.create_dataset("actions", data=np.array(actions))
+        if anchor_idx is not None:
+            ep_data_grp.attrs["anchor_idx"] = int(anchor_idx)
 
     now = datetime.datetime.now()
     grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
@@ -552,7 +504,12 @@ if __name__ == "__main__":
 
         anchor_counts[current_anchor] += 1
         gather_demonstrations_as_hdf5(
-            tmp_directory, new_dir, env_info, args, remove_directory
+            tmp_directory,
+            new_dir,
+            env_info,
+            args,
+            remove_directory,
+            anchor_idx=current_anchor,
         )
         collected += 1
         print(
