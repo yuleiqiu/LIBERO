@@ -16,19 +16,10 @@ from libero.libero.envs import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo-file", default="demo.hdf5")
-
-    parser.add_argument(
-        "--use-actions",
-        action="store_true",
-    ) # Not used in this script, but kept for compatibility
+    parser.add_argument("--use-actions", action="store_true") # Not used in this script, but kept for compatibility
     parser.add_argument("--use-camera-obs", action="store_true")
-
     parser.add_argument("--no-proprio", action="store_true")
-
-    parser.add_argument(
-        "--use-depth",
-        action="store_true",
-    )
+    parser.add_argument("--use-depth", action="store_true")
 
     args = parser.parse_args()
 
@@ -256,6 +247,11 @@ def main():
         ep_data_grp.attrs["num_samples"] = len(agentview_images)
         ep_data_grp.attrs["model_file"] = model_xml
         ep_data_grp.attrs["init_state"] = states[init_idx]
+        # Preserve anchor metadata if present in the source demo file
+        src_attrs = f[f"data/{ep}"].attrs
+        for key in ("anchor_id", "anchor_idx"):
+            if key in src_attrs:
+                ep_data_grp.attrs[key] = src_attrs[key]
         total_len += len(agentview_images)
 
     grp.attrs["num_demos"] = len(demos)
