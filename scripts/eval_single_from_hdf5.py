@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from collections import defaultdict
 
 import h5py
 import torch
@@ -19,6 +20,7 @@ from libero.lifelong.algos import get_algo_class
 from libero.lifelong.datasets import SequenceVLDataset, get_dataset
 from libero.lifelong.metric import raw_obs_to_tensor_obs
 from libero.lifelong.utils import control_seed, safe_device, torch_load_model
+from libero.libero.utils.video_utils import VideoWriter
 from libero.libero.envs import OffScreenRenderEnv
 
 
@@ -39,6 +41,15 @@ def read_language_from_hdf5(hdf5_path):
 def build_task_emb(cfg):
     lang_dim = cfg.policy.language_encoder.network_kwargs.get("input_size", 1)
     return torch.zeros((lang_dim,), dtype=torch.float32)
+
+
+def easydict_to_plain(d):
+    """
+    Recursively convert an EasyDict (or nested EasyDicts) to a plain dict.
+    """
+    if isinstance(d, dict):
+        return {k: easydict_to_plain(v) for k, v in d.items()}
+    return d
 
 
 def main():
@@ -74,6 +85,12 @@ def main():
         action="store_true",
         help="If set, compute eval loss on provided split indices; otherwise skip loss.",
     )
+    parser.add_argument(
+        "--save-videos",
+        type=int,
+        default=0,
+        help="If >0, save this many rollout videos (one mp4 per episode).",
+    )
     args = parser.parse_args()
 
     demo_path = Path(args.demo_file).expanduser().resolve()
@@ -85,8 +102,12 @@ def main():
     if ckpt_cfg is None:
         cfg = load_cfg(args.config_override)
     else:
-        # checkpoint cfg may be an EasyDict; ensure we can override device later
         cfg = ckpt_cfg
+        if args.config_override:
+            base = OmegaConf.create(easydict_to_plain(cfg))
+            override_conf = OmegaConf.from_dotlist(args.config_override)
+            merged = OmegaConf.merge(base, override_conf)
+            cfg = EasyDict(OmegaConf.to_container(merged, resolve=True))
 
     cfg.device = args.device
     control_seed(cfg.seed)
@@ -173,26 +194,91 @@ def main():
         print(f"[warning] init states file not found: {init_states_path}, skip rollout")
         return
     init_states = torch.load(str(init_states_path))
-    n_eval = min(getattr(cfg.eval, "n_eval", 9), init_states.shape[0])
+    anchors_meta = init_states_path.with_suffix(init_states_path.suffix + ".anchors.json")
+    anchor_indices = None
+    if anchors_meta.exists():
+        try:
+            with open(anchors_meta, "r") as f:
+                anchor_indices = json.load(f).get("anchor_idx", None)
+        except Exception as e:
+            print(f"[warning] failed to read anchors meta {anchors_meta}: {e}")
+
+    n_eval_cfg = getattr(cfg.eval, "n_eval", 20)
+
+    def build_rollout_order(anchor_idx_list, total_len, target_n):
+        if not anchor_idx_list:
+            return list(range(min(target_n, total_len)))
+        by_anchor = defaultdict(list)
+        for idx, a in enumerate(anchor_idx_list):
+            by_anchor[a].append(idx)
+        order = []
+        while len(order) < target_n and any(by_anchor.values()):
+            for a in sorted(by_anchor.keys()):
+                if by_anchor[a]:
+                    order.append(by_anchor[a].pop(0))
+                    if len(order) >= target_n:
+                        break
+        return order
+
+    max_available = init_states.shape[0]
+    n_eval = min(n_eval_cfg, max_available)
+    rollout_order = build_rollout_order(anchor_indices, max_available, n_eval)
+    if len(rollout_order) < n_eval:
+        n_eval = len(rollout_order)
+        print(f"[warning] not enough init states; using n_eval={n_eval}")
 
     successes = 0
     pbar = tqdm(range(n_eval), desc="rollout", leave=True)
-    for ep in pbar:
+    save_video = args.save_videos > 0
+    video_dir = None
+    if save_video:
+        ckpt_dir = Path(args.checkpoint).expanduser().resolve().parent
+        video_dir = ckpt_dir / "rollout_videos"
+        os.makedirs(video_dir, exist_ok=True)
+
+    for ep_idx, ep in enumerate(pbar):
         algo.reset()
         env.reset()
-        env.set_init_state(init_states[ep])
+        env.set_init_state(init_states[rollout_order[ep]])
         for _ in range(10):
-            obs, reward, done, info = env.step([0.] * 7)
+            obs, reward, done, info = env.step([0.0] * 7)
         success_flag = False
+        video_writer = None
+        if save_video and ep_idx < args.save_videos:
+            # write per-episode video as <video_dir>/<ep_idx>.mp4
+            video_writer = VideoWriter(
+                video_path=str(video_dir),
+                save_video=True,
+                single_video=False,
+            )
         for _ in range(max_steps):
             data = raw_obs_to_tensor_obs([obs], task_emb.unsqueeze(0), cfg)
             action = algo.policy.get_action(data)[0]
             obs, reward, done, info = env.step(action)
+            if video_writer:
+                video_writer.append_obs(
+                    obs,
+                    done=False,
+                    idx=ep_idx,
+                )
             if done:
                 successes += 1
                 success_flag = True
                 break
-        print(f"[info] rollout {ep}: success={success_flag}")
+        if video_writer:
+            video_writer.append_obs(
+                obs,
+                done=True,
+                idx=ep_idx,
+            )
+            video_writer.save()
+        anchor_id = (
+            anchor_indices[rollout_order[ep]] if anchor_indices and rollout_order[ep] < len(anchor_indices) else None
+        )
+        print(
+            f"[info] rollout {ep_idx} (init_idx={rollout_order[ep]}, anchor={anchor_id}): "
+            f"success={success_flag}"
+        )
     env.close()
     sr = successes / n_eval
     print(f"[info] rollout success rate: {sr:.3f} over {n_eval} episodes")

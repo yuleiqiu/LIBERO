@@ -47,6 +47,8 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.0,
+        sampling_strategy="random",
+        per_range_quota=1,
     ):
         self.x_ranges = x_ranges
         self.y_ranges = y_ranges
@@ -55,6 +57,9 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
         self.rotation = rotation
         self.rotation_axis = rotation_axis
         self.idx = 0
+        self.sampling_strategy = sampling_strategy
+        self.per_range_quota = max(1, int(per_range_quota))
+        self._range_queue = []
 
         super().__init__(
             name=name,
@@ -64,6 +69,22 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
             reference_pos=reference_pos,
             z_offset=z_offset,
         )
+
+    def _next_range_index(self):
+        if self.sampling_strategy == "random":
+            return np.random.randint(self.num_ranges)
+        if self.sampling_strategy in {"round_robin", "cycle"}:
+            if not self._range_queue:
+                indices = np.arange(self.num_ranges).repeat(self.per_range_quota)
+                np.random.shuffle(indices)
+                self._range_queue = indices.tolist()
+            return self._range_queue.pop(0)
+        if self.sampling_strategy in {"ordered", "deterministic_cycle"}:
+            if not self._range_queue:
+                indices = np.arange(self.num_ranges).repeat(self.per_range_quota)
+                self._range_queue = indices.tolist()
+            return self._range_queue.pop(0)
+        raise ValueError(f"Unknown sampling_strategy: {self.sampling_strategy}")
 
     def _sample_x(self, object_horizontal_radius):
         """
@@ -177,7 +198,7 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
             bottom_offset = obj.bottom_offset
             success = False
             for i in range(5000):  # 5000 retries
-                self.idx = np.random.randint(self.num_ranges)
+                self.idx = self._next_range_index()
                 object_x = self._sample_x(horizontal_radius) + base_offset[0]
                 object_y = self._sample_y(horizontal_radius) + base_offset[1]
                 object_z = self.z_offset + base_offset[2]

@@ -76,6 +76,8 @@ class BDDLBaseDomain(SingleArmEnv):
         arena_type="table",
         scene_xml="scenes/libero_base_style.xml",
         scene_properties={},
+        region_sampling_strategy="random",
+        region_sampling_quota=1,
         **kwargs,
     ):
         t0 = time.time()
@@ -131,6 +133,8 @@ class BDDLBaseDomain(SingleArmEnv):
         self._arena_type = arena_type
         self._arena_xml = os.path.join(self.custom_asset_dir, scene_xml)
         self._arena_properties = scene_properties
+        self.region_sampling_strategy = region_sampling_strategy
+        self.region_sampling_quota = region_sampling_quota
 
         super().__init__(
             robots=robots,
@@ -612,6 +616,8 @@ class BDDLBaseDomain(SingleArmEnv):
                         ensure_object_boundary_in_range=False,
                         ensure_valid_placement=False,
                         reference_pos=self.workspace_offset,
+                        sampling_strategy=self.region_sampling_strategy,
+                        per_range_quota=self.region_sampling_quota,
                     )
                     self.placement_initializer.append_sampler(fixture_sampler)
                 else:
@@ -627,6 +633,8 @@ class BDDLBaseDomain(SingleArmEnv):
                         rotation=self.objects_dict[object_name].rotation,
                         rotation_axis=self.objects_dict[object_name].rotation_axis,
                         reference_pos=self.workspace_offset,
+                        sampling_strategy=self.region_sampling_strategy,
+                        per_range_quota=self.region_sampling_quota,
                     )
                     self.placement_initializer.append_sampler(region_sampler)
             if state[0] in ["open", "close"]:
