@@ -6,7 +6,9 @@ from collections import defaultdict
 
 import h5py
 import torch
+import numpy as np
 import yaml
+from tqdm import tqdm
 from easydict import EasyDict
 from hydra import compose, initialize_config_dir
 from hydra.utils import to_absolute_path
@@ -21,7 +23,7 @@ from libero.lifelong.datasets import SequenceVLDataset, get_dataset
 from libero.lifelong.metric import raw_obs_to_tensor_obs
 from libero.lifelong.utils import control_seed, safe_device, torch_load_model
 from libero.libero.utils.video_utils import VideoWriter
-from libero.libero.envs import OffScreenRenderEnv
+from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, DummyVectorEnv
 
 
 def load_cfg(overrides):
@@ -74,7 +76,12 @@ def main():
         default=[],
         help="Optional hydra-style overrides if checkpoint lacks cfg",
     )
-    parser.add_argument("--device", default="cuda", help="Device for eval, e.g., cuda or cpu")
+    parser.add_argument(
+        "--device-id",
+        type=int,
+        default=0,
+        help="CUDA device id for eval (e.g., 0 -> cuda:0)",
+    )
     parser.add_argument(
         "--rollout",
         action="store_true",
@@ -97,7 +104,9 @@ def main():
     if not demo_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {demo_path}")
 
-    state_dict, ckpt_cfg, _ = torch_load_model(args.checkpoint, map_location="cpu")
+    device = f"cuda:{args.device_id}"
+    map_location = device if torch.cuda.is_available() else "cpu"
+    state_dict, ckpt_cfg, _ = torch_load_model(args.checkpoint, map_location=map_location)
 
     if ckpt_cfg is None:
         cfg = load_cfg(args.config_override)
@@ -109,7 +118,7 @@ def main():
             merged = OmegaConf.merge(base, override_conf)
             cfg = EasyDict(OmegaConf.to_container(merged, resolve=True))
 
-    cfg.device = args.device
+    cfg.device = device
     control_seed(cfg.seed)
 
     # Ensure paths
@@ -144,10 +153,12 @@ def main():
         if split_path and os.path.exists(split_path):
             with open(split_path, "r") as f:
                 split_idx = json.load(f)
-            eval_idx = split_idx.get("eval", [])
+            eval_idx = split_idx.get("eval") or split_idx.get("val", [])
+            split_name = "eval" if "eval" in split_idx else "val"
             if len(eval_idx) == 0:
-                print("[warning] eval split empty, skip loss eval")
+                print(f"[warning] {split_name} split empty, skip loss eval")
             else:
+                print(f"[info] using {split_name} split for loss eval ({len(eval_idx)} samples)")
                 dataset_loss = Subset(dataset, eval_idx)
                 loader = DataLoader(
                     dataset_loss,
@@ -185,7 +196,6 @@ def main():
         "camera_heights": cfg.data.img_h,
         "camera_widths": cfg.data.img_w,
     }
-    env = OffScreenRenderEnv(**env_args)
     max_steps = getattr(cfg.eval, "max_steps", 600)
 
     # load init states
@@ -194,6 +204,9 @@ def main():
         print(f"[warning] init states file not found: {init_states_path}, skip rollout")
         return
     init_states = torch.load(str(init_states_path))
+    # ensure numpy array for mujoco state setter
+    if torch.is_tensor(init_states):
+        init_states = init_states.cpu().numpy()
     anchors_meta = init_states_path.with_suffix(init_states_path.suffix + ".anchors.json")
     anchor_indices = None
     if anchors_meta.exists():
@@ -227,61 +240,92 @@ def main():
         n_eval = len(rollout_order)
         print(f"[warning] not enough init states; using n_eval={n_eval}")
 
-    successes = 0
-    pbar = tqdm(range(n_eval), desc="rollout", leave=True)
-    save_video = args.save_videos > 0
-    video_dir = None
+    use_mp = getattr(cfg.eval, "use_mp", False)
+    cfg_num_procs = getattr(cfg.eval, "num_procs", 1)
+    env_num = min(cfg_num_procs, n_eval) if use_mp else 1
+
+    eval_loop_num = (n_eval + env_num - 1) // env_num
+
+    # Video writer: record only in the first batch, per-env mp4.
+    record_envs = min(args.save_videos, env_num)
+    save_video = record_envs > 0
+    video_writer = None
     if save_video:
         ckpt_dir = Path(args.checkpoint).expanduser().resolve().parent
         video_dir = ckpt_dir / "rollout_videos"
         os.makedirs(video_dir, exist_ok=True)
+        video_writer = VideoWriter(video_path=str(video_dir), save_video=True, single_video=False)
 
-    for ep_idx, ep in enumerate(pbar):
-        algo.reset()
+    env = (
+        DummyVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
+        if env_num == 1
+        else SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
+    )
+    env.seed(cfg.seed)
+
+    algo.reset()
+    successes = 0
+    episodes_done = 0
+    pbar = tqdm(total=n_eval, desc="rollout", leave=True)
+    for loop_idx in range(eval_loop_num):
+        if episodes_done >= n_eval:
+            break
+        indices = [
+            rollout_order[(loop_idx * env_num + k) % len(rollout_order)]
+            for k in range(env_num)
+        ]
+        init_states_batch = init_states[indices]
+
         env.reset()
-        env.set_init_state(init_states[rollout_order[ep]])
-        for _ in range(10):
-            obs, reward, done, info = env.step([0.0] * 7)
-        success_flag = False
-        video_writer = None
-        if save_video and ep_idx < args.save_videos:
-            # write per-episode video as <video_dir>/<ep_idx>.mp4
-            video_writer = VideoWriter(
-                video_path=str(video_dir),
-                save_video=True,
-                single_video=False,
-            )
-        for _ in range(max_steps):
-            data = raw_obs_to_tensor_obs([obs], task_emb.unsqueeze(0), cfg)
-            action = algo.policy.get_action(data)[0]
-            obs, reward, done, info = env.step(action)
-            if video_writer:
-                video_writer.append_obs(
-                    obs,
-                    done=False,
-                    idx=ep_idx,
-                )
-            if done:
+        obs = env.set_init_state(init_states_batch)
+        dummy = np.zeros((env_num, 7))
+        for _ in range(5):
+            obs, reward, done, info = env.step(dummy)
+
+        dones = [False] * env_num
+        steps = 0
+        task_emb_batch = task_emb if env_num == 1 else task_emb.unsqueeze(0).repeat(env_num, 1)
+        remaining = min(env_num, n_eval - episodes_done)
+
+        while steps < max_steps:
+            steps += 1
+            data = raw_obs_to_tensor_obs(obs, task_emb_batch, cfg)
+            actions = algo.policy.get_action(data)
+            obs, reward, done, info = env.step(actions)
+
+            if env_num == 1 and done:
                 successes += 1
-                success_flag = True
+            elif env_num > 1:
+                for k in range(env_num):
+                    dones[k] = dones[k] or done[k]
+                if all(dones):
+                    break
+
+            if video_writer and loop_idx == 0:
+                if env_num == 1:
+                    video_writer.append_obs(obs, done=done, idx=0)
+                else:
+                    obs_rec = [obs[i] for i in range(record_envs)]
+                    dones_rec = [dones[i] for i in range(record_envs)]
+                    video_writer.append_vector_obs(obs_rec, dones_rec, camera_name="agentview_image")
+
+            if env_num == 1 and done:
                 break
-        if video_writer:
-            video_writer.append_obs(
-                obs,
-                done=True,
-                idx=ep_idx,
-            )
-            video_writer.save()
-        anchor_id = (
-            anchor_indices[rollout_order[ep]] if anchor_indices and rollout_order[ep] < len(anchor_indices) else None
-        )
-        print(
-            f"[info] rollout {ep_idx} (init_idx={rollout_order[ep]}, anchor={anchor_id}): "
-            f"success={success_flag}"
-        )
+
+        if env_num > 1:
+            successes += sum(int(dones[k]) for k in range(remaining))
+
+        episodes_done += remaining
+        pbar.update(remaining)
+        pbar.set_postfix(sr=successes / max(episodes_done, 1))
+
     env.close()
+    pbar.close()
+    if video_writer:
+        video_writer.save()
+
     sr = successes / n_eval
-    print(f"[info] rollout success rate: {sr:.3f} over {n_eval} episodes")
+    print(f"[info] rollout success rate: {sr:.3f} over {n_eval} episodes (envs per batch: {env_num})")
 
 
 if __name__ == "__main__":

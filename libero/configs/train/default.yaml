@@ -1,5 +1,6 @@
 # training
 n_epochs: 50
+val_every: 5
 batch_size: 32
 num_workers: 4
 grad_clip: 100.
