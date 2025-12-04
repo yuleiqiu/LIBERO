@@ -59,11 +59,14 @@ def train_single_task(cfg: EasyDict,
     assert train_ratio + val_ratio <= 1 + 1e-8, "train_ratio + val_ratio must be <= 1"
     train_size = int(total_len * train_ratio)
     val_size = int(total_len * val_ratio)
-    if val_size <= 0 and total_len > 0:
-        val_size = 1
-        train_size = max(total_len - val_size, 0)
-    train_size = min(train_size, total_len - val_size)
-    eval_size = max(total_len - train_size - val_size, 0)
+    overflow = max(train_size + val_size - total_len, 0)
+    if overflow > 0:
+        if val_size >= overflow:
+            val_size -= overflow
+        else:
+            train_size = max(train_size - (overflow - val_size), 0)
+            val_size = 0
+
     g = torch.Generator().manual_seed(cfg.seed)
     indices = torch.randperm(total_len, generator=g).tolist()
     train_idx = indices[:train_size]
@@ -96,38 +99,44 @@ def train_single_task(cfg: EasyDict,
         sampler=RandomSampler(train_dataset),
         persistent_workers=True,
     )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=getattr(cfg.eval, "batch_size", cfg.train.batch_size),
-        num_workers=getattr(cfg.eval, "num_workers", 0),
-        shuffle=False,
-        persistent_workers=False,
-    )
+    val_loader = None
+    if len(val_dataset) > 0:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=cfg.train.batch_size,
+            num_workers=0,
+            shuffle=False,
+            persistent_workers=False,
+        )
 
     best_loss = float("inf")
     model_best_path = os.path.join(save_dir, "model_best.pth")
     model_last_path = os.path.join(save_dir, "model_last.pth")
 
     n_epochs = cfg.train.n_epochs
-    val_every = getattr(cfg.train, "val_every", getattr(cfg.eval, "eval_every", 1))
+    val_every = getattr(cfg.train, "val_every", 5)
 
     # Zero-shot evaluation on validation set (epoch 0)
     algo.policy.eval()
     val_losses = []
-    with torch.no_grad():
-        for data in tqdm(val_loader, desc="val epoch 0", leave=True):
-            loss = algo.eval_observe(data)
-            val_losses.append(loss)
-    val_avg = sum(val_losses) / max(len(val_losses), 1)
+    if val_loader is not None:
+        with torch.no_grad():
+            for data in tqdm(val_loader, desc="val epoch 0", leave=True):
+                loss = algo.eval_observe(data)
+                val_losses.append(loss)
+    val_avg = sum(val_losses) / max(len(val_losses), 1) if val_losses else float("inf")
     best_loss = val_avg
-    if ckpt_mode == "best":
-        torch_save_model(algo.policy, model_best_path, cfg=cfg)
-        print(f"[info] epoch 000 | val avg loss {val_avg:.4f} | saved checkpoint (best)")
+    if val_loader is not None:
+        if ckpt_mode == "best":
+            torch_save_model(algo.policy, model_best_path, cfg=cfg)
+            print(f"[info] epoch 000 | val avg loss {val_avg:.4f} | saved checkpoint (best)")
+        else:
+            print(f"[info] epoch 000 | val avg loss {val_avg:.4f}")
     else:
-        print(f"[info] epoch 000 | val avg loss {val_avg:.4f}")
+        print("[info] epoch 000 | no val split; skip zero-shot val")
     last_interval_ckpt = None
 
-    if cfg.use_wandb:
+    if cfg.use_wandb and val_loader is not None:
         wandb.log({"val_loss": val_avg, "epoch": 0})
 
     for epoch in range(1, n_epochs + 1):
@@ -205,8 +214,6 @@ def main():
         default=[],
         help="Hydra-style overrides, e.g., policy=bc_rnn_policy lifelong=er train.n_epochs=20",
     )
-    parser.add_argument("--train-ratio", type=float, default=0.9, help="Train split ratio")
-    parser.add_argument("--val-ratio", type=float, default=0.1, help="Val split ratio")
     parser.add_argument(
         "--ckpt-mode",
         choices=["best", "last", "interval"],
@@ -267,13 +274,17 @@ def main():
     print(f"[info] language: {language_instruction}")
     print(f"[info] algo: {cfg.lifelong.algo}, policy: {cfg.policy.policy_type}")
     
+    # split ratios from config (data.train_dataset_ratio / data.val_dataset_ratio)
+    train_ratio = cfg.data.train_dataset_ratio
+    val_ratio = cfg.data.val_dataset_ratio
+
     train_single_task(
         cfg,
         dataset,
         task_emb,
         cfg.experiment_dir,
-        args.train_ratio,
-        args.val_ratio,
+        train_ratio,
+        val_ratio,
         args.ckpt_mode,
         args.ckpt_interval,
     )

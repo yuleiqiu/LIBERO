@@ -33,7 +33,6 @@ obs_key_mapping:
   gripper_states: robot0_gripper_qpos
   joint_states: robot0_joint_pos
 
-# action related
-affine_translate: 4
-action_scale: 1.0
-train_dataset_ratio: 0.8
+# dataset split ratios
+train_dataset_ratio: 0.9
+val_dataset_ratio: 0.1
