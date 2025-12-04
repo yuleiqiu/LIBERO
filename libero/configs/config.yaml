@@ -15,7 +15,6 @@ wandb_project: "lifelong learning"
 folder: null # use default path
 bddl_folder: null # use default path
 init_states_folder: null # use default path
-load_previous_model: false
 device: "cuda"
 task_embedding_format: "bert"
 task_embedding_one_hot_offset: 1
