@@ -11,4 +11,3 @@ train:
 eval:
   eval_every: 5
   n_epochs: 50
-

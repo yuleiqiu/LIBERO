@@ -6,6 +6,7 @@ from pathlib import Path
 import h5py
 import torch
 import yaml
+import wandb
 from easydict import EasyDict
 from hydra import compose, initialize_config_dir
 from hydra.utils import to_absolute_path
@@ -31,13 +32,21 @@ def load_cfg(overrides):
     return cfg
 
 
-def read_language_from_hdf5(hdf5_path):
+def read_language_from_hdf5(hdf5_path: str) -> str:
     with h5py.File(hdf5_path, "r") as f:
         problem_info = json.loads(f["data"].attrs["problem_info"])
     return problem_info["language_instruction"]
 
 
-def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
+def train_single_task(cfg: EasyDict,
+                      dataset: SequenceVLDataset,
+                      task_emb: torch.Tensor,
+                      save_dir: str,
+                      train_ratio: float,
+                      val_ratio: float,
+                      ckpt_mode: str,
+                      ckpt_interval: int
+                    ) -> None:
     """
     Minimal single-task training loop (no benchmark dependency).
     """
@@ -45,18 +54,16 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
     algo = safe_device(algo_cls(n_tasks=1, cfg=cfg), cfg.device)
     algo.start_task(0)
 
-    # Split dataset into train / val / eval (eval indices saved for external eval)
+    # Split dataset into train / val / eval (eval is the leftover if ratios don't sum to 1)
     total_len = len(dataset)
+    assert train_ratio + val_ratio <= 1 + 1e-8, "train_ratio + val_ratio must be <= 1"
     train_size = int(total_len * train_ratio)
     val_size = int(total_len * val_ratio)
-    eval_size = total_len - train_size - val_size
-    if val_size <= 0:
+    if val_size <= 0 and total_len > 0:
         val_size = 1
-        train_size = max(train_size - 1, 1)
-        eval_size = total_len - train_size - val_size
-    if eval_size <= 0:
-        eval_size = 1
-        train_size = max(train_size - 1, 1)
+        train_size = max(total_len - val_size, 0)
+    train_size = min(train_size, total_len - val_size)
+    eval_size = max(total_len - train_size - val_size, 0)
     g = torch.Generator().manual_seed(cfg.seed)
     indices = torch.randperm(total_len, generator=g).tolist()
     train_idx = indices[:train_size]
@@ -70,6 +77,14 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
         f"[info] dataset split saved to {split_path} "
         f"(train {len(train_idx)}, val {len(val_idx)}, eval {len(eval_idx)})"
     )
+    if cfg.use_wandb:
+        wandb.run.summary.update(
+            {
+                "split/train_size": len(train_idx),
+                "split/val_size": len(val_idx),
+                "split/eval_size": len(eval_idx),
+            }
+        )
 
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
@@ -90,10 +105,11 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
     )
 
     best_loss = float("inf")
-    ckpt_path = os.path.join(save_dir, "task0_model.pth")
+    model_best_path = os.path.join(save_dir, "model_best.pth")
+    model_last_path = os.path.join(save_dir, "model_last.pth")
 
     n_epochs = cfg.train.n_epochs
-    val_every = getattr(cfg.eval, "eval_every", 1)
+    val_every = getattr(cfg.train, "val_every", getattr(cfg.eval, "eval_every", 1))
 
     # Zero-shot evaluation on validation set (epoch 0)
     algo.policy.eval()
@@ -104,8 +120,15 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
             val_losses.append(loss)
     val_avg = sum(val_losses) / max(len(val_losses), 1)
     best_loss = val_avg
-    torch_save_model(algo.policy, ckpt_path, cfg=cfg)
-    print(f"[info] epoch 000 | val avg loss {val_avg:.4f} | saved checkpoint")
+    if ckpt_mode == "best":
+        torch_save_model(algo.policy, model_best_path, cfg=cfg)
+        print(f"[info] epoch 000 | val avg loss {val_avg:.4f} | saved checkpoint (best)")
+    else:
+        print(f"[info] epoch 000 | val avg loss {val_avg:.4f}")
+    last_interval_ckpt = None
+
+    if cfg.use_wandb:
+        wandb.log({"val_loss": val_avg, "epoch": 0})
 
     for epoch in range(1, n_epochs + 1):
         algo.policy.train()
@@ -116,6 +139,8 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
 
         train_avg = sum(train_losses) / max(len(train_losses), 1)
         print(f"[info] epoch {epoch:03d} | train avg loss {train_avg:.4f}")
+        if cfg.use_wandb:
+            wandb.log({"train_loss": train_avg, "epoch": epoch})
 
         if epoch % val_every == 0 or epoch == n_epochs:
             algo.policy.eval()
@@ -129,13 +154,46 @@ def train_single_task(cfg, dataset, task_emb, save_dir, train_ratio, val_ratio):
                 f"[info] epoch {epoch:03d} | val avg loss {val_avg:.4f} "
                 f"| train avg loss {train_avg:.4f}"
             )
+            if cfg.use_wandb:
+                wandb.log({"val_loss": val_avg, "train_loss": train_avg, "epoch": epoch})
 
             if val_avg < best_loss:
                 best_loss = val_avg
-                torch_save_model(algo.policy, ckpt_path, cfg=cfg)
-                print(f"[info] saved best checkpoint to {ckpt_path}")
+                if ckpt_mode == "best":
+                    torch_save_model(algo.policy, model_best_path, cfg=cfg)
+                    print(f"[info] saved best checkpoint to {model_best_path}")
 
-    print(f"[info] finished training. best val loss={best_loss:.4f}, ckpt={ckpt_path}")
+            if ckpt_mode == "interval":
+                if epoch % ckpt_interval == 0 or epoch == n_epochs:
+                    ckpt_path = os.path.join(save_dir, f"model_epoch_{epoch:03d}.pth")
+                    torch_save_model(algo.policy, ckpt_path, cfg=cfg)
+                    last_interval_ckpt = ckpt_path
+                    print(f"[info] saved interval checkpoint to {ckpt_path}")
+
+    if ckpt_mode == "last":
+        torch_save_model(algo.policy, model_last_path, cfg=cfg)
+        print(f"[info] saved last checkpoint to {model_last_path}")
+
+    final_ckpt = None
+    if ckpt_mode == "best":
+        final_ckpt = model_best_path
+        ckpt_label = "best_ckpt"
+    elif ckpt_mode == "last":
+        final_ckpt = model_last_path
+        ckpt_label = "last_ckpt"
+    elif ckpt_mode == "interval":
+        final_ckpt = last_interval_ckpt
+        ckpt_label = "interval_ckpt"
+
+    print(
+        f"[info] finished training. best val loss={best_loss:.4f}, "
+        f"{ckpt_label}={(final_ckpt or 'N/A')}"
+    )
+    if cfg.use_wandb:
+        wandb.run.summary["best_val_loss"] = best_loss
+        if final_ckpt:
+            wandb.run.summary["ckpt_path"] = final_ckpt
+        wandb.run.summary.update()
 
 
 def main():
@@ -147,11 +205,30 @@ def main():
         default=[],
         help="Hydra-style overrides, e.g., policy=bc_rnn_policy lifelong=er train.n_epochs=20",
     )
-    parser.add_argument("--train-ratio", type=float, default=0.8, help="Train split ratio")
+    parser.add_argument("--train-ratio", type=float, default=0.9, help="Train split ratio")
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Val split ratio")
+    parser.add_argument(
+        "--ckpt-mode",
+        choices=["best", "last", "interval"],
+        default="best",
+        help="Checkpoint saving strategy",
+    )
+    parser.add_argument(
+        "--ckpt-interval",
+        type=int,
+        default=10,
+        help="Checkpoint save interval for 'interval' mode; if epochs < interval, save final",
+    )
+    parser.add_argument(
+        "--device-id",
+        type=int,
+        default=0,
+        help="CUDA device id (e.g., 0 -> cuda:0)",
+    )
     args = parser.parse_args()
 
     cfg = load_cfg(args.config_override)
+    cfg.device = f"cuda:{args.device_id}"
     control_seed(cfg.seed)
 
     demo_path = Path(args.demo_file).expanduser().resolve()
@@ -181,19 +258,27 @@ def main():
     cfg.shape_meta = shape_meta
     create_experiment_dir(cfg)
     os.makedirs(cfg.experiment_dir, exist_ok=True)
+    if cfg.use_wandb:
+        wandb.init(project=cfg.wandb_project, config=cfg)
+        wandb.run.name = cfg.experiment_name
     print("\n")
     print(f"[info] experiment dir: {cfg.experiment_dir}")
     print(f"[info] training on HDF5: {demo_path}")
     print(f"[info] language: {language_instruction}")
     print(f"[info] algo: {cfg.lifelong.algo}, policy: {cfg.policy.policy_type}")
     
-    # pp(cfg.data)
-    # pp(cfg.policy)
-    # pp(cfg.train)
-    # pp(cfg.eval)
-    # pp(cfg.lifelong)
-
-    train_single_task(cfg, dataset, task_emb, cfg.experiment_dir, args.train_ratio, args.val_ratio)
+    train_single_task(
+        cfg,
+        dataset,
+        task_emb,
+        cfg.experiment_dir,
+        args.train_ratio,
+        args.val_ratio,
+        args.ckpt_mode,
+        args.ckpt_interval,
+    )
+    if cfg.use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":
