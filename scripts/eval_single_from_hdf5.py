@@ -263,17 +263,20 @@ def main():
     )
     env.seed(cfg.seed)
 
-    algo.reset()
     successes = 0
     episodes_done = 0
     pbar = tqdm(total=n_eval, desc="rollout", leave=True)
     for loop_idx in range(eval_loop_num):
         if episodes_done >= n_eval:
             break
+        algo.reset()
         indices = [
             rollout_order[(loop_idx * env_num + k) % len(rollout_order)]
-            for k in range(env_num)
+            for k in range(min(env_num, n_eval - episodes_done))
         ]
+        # pad to env_num for convenience, extras are marked done immediately
+        if len(indices) < env_num:
+            indices = indices + [indices[-1]] * (env_num - len(indices))
         init_states_batch = init_states[indices]
 
         env.reset()
@@ -282,14 +285,15 @@ def main():
         for _ in range(5):
             obs, reward, done, info = env.step(dummy)
 
-        dones = [False] * env_num
-        steps = 0
-        task_emb_batch = task_emb if env_num == 1 else task_emb.unsqueeze(0).repeat(env_num, 1)
         remaining = min(env_num, n_eval - episodes_done)
+        dones = [False] * env_num
+        for k in range(remaining, env_num):
+            dones[k] = True  # ignore padded envs
+        steps = 0
 
         while steps < max_steps:
             steps += 1
-            data = raw_obs_to_tensor_obs(obs, task_emb_batch, cfg)
+            data = raw_obs_to_tensor_obs(obs, task_emb, cfg)
             actions = algo.policy.get_action(data)
             obs, reward, done, info = env.step(actions)
 
@@ -305,8 +309,9 @@ def main():
                 if env_num == 1:
                     video_writer.append_obs(obs, done=done, idx=0)
                 else:
-                    obs_rec = [obs[i] for i in range(record_envs)]
-                    dones_rec = [dones[i] for i in range(record_envs)]
+                    rec = min(record_envs, remaining)
+                    obs_rec = [obs[i] for i in range(rec)]
+                    dones_rec = [dones[i] for i in range(rec)]
                     video_writer.append_vector_obs(obs_rec, dones_rec, camera_name="agentview_image")
 
             if env_num == 1 and done:

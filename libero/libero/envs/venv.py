@@ -8,8 +8,7 @@ import time
 
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from multiprocessing import Array, Pipe, connection
-from multiprocessing.context import Process
+from multiprocessing import Array, Pipe, connection, get_context
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 
@@ -371,7 +370,8 @@ class SubprocEnvWorker(EnvWorker):
             CloudpickleWrapper(env_fn),
             self.buffer,
         )
-        self.process = Process(target=_worker, args=args, daemon=True)
+        ctx = get_context("spawn")
+        self.process = ctx.Process(target=_worker, args=args, daemon=True)
         self.process.start()
         self.child_remote.close()
         super().__init__(env_fn)
