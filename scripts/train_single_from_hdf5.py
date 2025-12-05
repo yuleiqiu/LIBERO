@@ -202,7 +202,6 @@ def train_single_task(cfg: EasyDict,
         wandb.run.summary["best_val_loss"] = best_loss
         if final_ckpt:
             wandb.run.summary["ckpt_path"] = final_ckpt
-        wandb.run.summary.update()
 
 
 def main():
