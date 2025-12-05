@@ -265,6 +265,7 @@ def main():
 
     successes = 0
     episodes_done = 0
+    batch_success_counts = []
     pbar = tqdm(total=n_eval, desc="rollout", leave=True)
     for loop_idx in range(eval_loop_num):
         if episodes_done >= n_eval:
@@ -286,6 +287,7 @@ def main():
             obs, reward, done, info = env.step(dummy)
 
         remaining = min(env_num, n_eval - episodes_done)
+        prev_successes = successes
         dones = [False] * env_num
         for k in range(remaining, env_num):
             dones[k] = True  # ignore padded envs
@@ -320,6 +322,8 @@ def main():
         if env_num > 1:
             successes += sum(int(dones[k]) for k in range(remaining))
 
+        batch_success = successes - prev_successes
+        batch_success_counts.append(f"{batch_success}/{remaining}")
         episodes_done += remaining
         pbar.update(remaining)
         pbar.set_postfix(sr=successes / max(episodes_done, 1))
@@ -330,7 +334,12 @@ def main():
         video_writer.save()
 
     sr = successes / n_eval
-    print(f"[info] rollout success rate: {sr:.3f} over {n_eval} episodes (envs per batch: {env_num})")
+    batch_str = ", ".join(batch_success_counts)
+    print(
+        "[info] rollout success: "
+        f"batches {batch_str} | total {successes}/{n_eval} ({sr:.3f}) across {n_eval} episodes; "
+        f"envs per batch: {env_num}"
+    )
 
 
 if __name__ == "__main__":
