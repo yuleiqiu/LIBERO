@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import json
 import os
 from pathlib import Path
@@ -118,13 +119,44 @@ def train_single_task(cfg: EasyDict,
 
     # Zero-shot evaluation on validation set (epoch 0)
     algo.policy.eval()
+    support_stats = "return_stats" in inspect.signature(algo.observe).parameters
+    support_eval_stats = "return_stats" in inspect.signature(algo.eval_observe).parameters
     val_losses = []
+    val_gmm_losses = []
+    val_action_mses = []
+    val_mean_log_stds = []
     if val_loader is not None:
         with torch.no_grad():
             for data in tqdm(val_loader, desc="val epoch 0", leave=True):
-                loss = algo.eval_observe(data)
+                out = (
+                    algo.eval_observe(data, return_stats=True)
+                    if support_eval_stats
+                    else algo.eval_observe(data)
+                )
+                if support_eval_stats and isinstance(out, tuple):
+                    loss, stats = out
+                    val_gmm_losses.append(stats.get("gmm_loss"))
+                    val_action_mses.append(stats.get("action_mse"))
+                    val_mean_log_stds.append(stats.get("mean_log_std"))
+                else:
+                    loss = out
                 val_losses.append(loss)
     val_avg = sum(val_losses) / max(len(val_losses), 1) if val_losses else float("inf")
+    val_gmm_avg = (
+        sum(val_gmm_losses) / max(len(val_gmm_losses), 1)
+        if (support_eval_stats and val_gmm_losses)
+        else None
+    )
+    val_action_mse_avg = (
+        sum(val_action_mses) / max(len(val_action_mses), 1)
+        if (support_eval_stats and val_action_mses)
+        else None
+    )
+    val_mean_log_std_avg = (
+        sum(val_mean_log_stds) / max(len(val_mean_log_stds), 1)
+        if (support_eval_stats and val_mean_log_stds)
+        else None
+    )
     best_loss = val_avg
     if val_loader is not None:
         if ckpt_mode == "best":
@@ -137,34 +169,123 @@ def train_single_task(cfg: EasyDict,
     last_interval_ckpt = None
 
     if cfg.use_wandb and val_loader is not None:
-        wandb.log({"val_loss": val_avg, "epoch": 0})
+        log_data = {"val_loss": val_avg, "epoch": 0}
+        if support_eval_stats:
+            if val_gmm_avg is not None:
+                log_data["val/gmm_loss"] = val_gmm_avg
+            if val_action_mse_avg is not None:
+                log_data["val/action_mse"] = val_action_mse_avg
+            if val_mean_log_std_avg is not None:
+                log_data["val/mean_log_std"] = val_mean_log_std_avg
+        wandb.log(log_data)
 
     for epoch in range(1, n_epochs + 1):
         algo.policy.train()
         train_losses = []
+        train_gmm_losses = []
+        train_action_mses = []
+        train_mean_log_stds = []
         for data in tqdm(train_loader, desc=f"train epoch {epoch}", leave=True):
-            loss = algo.observe(data)
+            out = (
+                algo.observe(data, return_stats=True)
+                if support_stats
+                else algo.observe(data)
+            )
+            if support_stats and isinstance(out, tuple):
+                loss, stats = out
+                train_gmm_losses.append(stats.get("gmm_loss"))
+                train_action_mses.append(stats.get("action_mse"))
+                train_mean_log_stds.append(stats.get("mean_log_std"))
+            else:
+                loss = out
             train_losses.append(loss)
 
         train_avg = sum(train_losses) / max(len(train_losses), 1)
+        train_gmm_avg = (
+            sum(train_gmm_losses) / max(len(train_gmm_losses), 1)
+            if (support_stats and train_gmm_losses)
+            else None
+        )
+        train_action_mse_avg = (
+            sum(train_action_mses) / max(len(train_action_mses), 1)
+            if (support_stats and train_action_mses)
+            else None
+        )
+        train_mean_log_std_avg = (
+            sum(train_mean_log_stds) / max(len(train_mean_log_stds), 1)
+            if (support_stats and train_mean_log_stds)
+            else None
+        )
         print(f"[info] epoch {epoch:03d} | train avg loss {train_avg:.4f}")
         if cfg.use_wandb:
-            wandb.log({"train_loss": train_avg, "epoch": epoch})
+            log_data = {"train_loss": train_avg, "epoch": epoch}
+            if support_stats:
+                if train_gmm_avg is not None:
+                    log_data["train/gmm_loss"] = train_gmm_avg
+                if train_action_mse_avg is not None:
+                    log_data["train/action_mse"] = train_action_mse_avg
+                if train_mean_log_std_avg is not None:
+                    log_data["train/mean_log_std"] = train_mean_log_std_avg
+            wandb.log(log_data)
 
-        if epoch % val_every == 0 or epoch == n_epochs:
+        if (val_loader is not None) and (epoch % val_every == 0 or epoch == n_epochs):
             algo.policy.eval()
             val_losses = []
+            val_gmm_losses = []
+            val_action_mses = []
+            val_mean_log_stds = []
             with torch.no_grad():
                 for data in tqdm(val_loader, desc=f"val epoch {epoch}", leave=True):
-                    loss = algo.eval_observe(data)
+                    out = (
+                        algo.eval_observe(data, return_stats=True)
+                        if support_eval_stats
+                        else algo.eval_observe(data)
+                    )
+                    if support_eval_stats and isinstance(out, tuple):
+                        loss, stats = out
+                        val_gmm_losses.append(stats.get("gmm_loss"))
+                        val_action_mses.append(stats.get("action_mse"))
+                        val_mean_log_stds.append(stats.get("mean_log_std"))
+                    else:
+                        loss = out
                     val_losses.append(loss)
             val_avg = sum(val_losses) / max(len(val_losses), 1)
+            val_gmm_avg = (
+                sum(val_gmm_losses) / max(len(val_gmm_losses), 1)
+                if (support_eval_stats and val_gmm_losses)
+                else None
+            )
+            val_action_mse_avg = (
+                sum(val_action_mses) / max(len(val_action_mses), 1)
+                if (support_eval_stats and val_action_mses)
+                else None
+            )
+            val_mean_log_std_avg = (
+                sum(val_mean_log_stds) / max(len(val_mean_log_stds), 1)
+                if (support_eval_stats and val_mean_log_stds)
+                else None
+            )
             print(
                 f"[info] epoch {epoch:03d} | val avg loss {val_avg:.4f} "
                 f"| train avg loss {train_avg:.4f}"
             )
             if cfg.use_wandb:
-                wandb.log({"val_loss": val_avg, "train_loss": train_avg, "epoch": epoch})
+                log_data = {"val_loss": val_avg, "train_loss": train_avg, "epoch": epoch}
+                if support_eval_stats:
+                    if val_gmm_avg is not None:
+                        log_data["val/gmm_loss"] = val_gmm_avg
+                    if val_action_mse_avg is not None:
+                        log_data["val/action_mse"] = val_action_mse_avg
+                    if val_mean_log_std_avg is not None:
+                        log_data["val/mean_log_std"] = val_mean_log_std_avg
+                if support_stats:
+                    if train_gmm_avg is not None:
+                        log_data["train/gmm_loss"] = train_gmm_avg
+                    if train_action_mse_avg is not None:
+                        log_data["train/action_mse"] = train_action_mse_avg
+                    if train_mean_log_std_avg is not None:
+                        log_data["train/mean_log_std"] = train_mean_log_std_avg
+                wandb.log(log_data)
 
             if val_avg < best_loss:
                 best_loss = val_avg

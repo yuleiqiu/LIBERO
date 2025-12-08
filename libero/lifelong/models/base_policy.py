@@ -112,11 +112,29 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
             data["task_emb"] = data["task_emb"].squeeze(1)
         return data
 
-    def compute_loss(self, data, reduction="mean"):
+    def compute_loss(self, data, reduction="mean", return_stats=False):
         data = self.preprocess_input(data, train_mode=True)
         dist = self.forward(data)
         loss = self.policy_head.loss_fn(dist, data["actions"], reduction)
-        return loss
+        if not return_stats:
+            return loss
+
+        mix_probs = dist.mixture_distribution.probs  # (..., num_modes)
+        comp = dist.component_distribution.base_dist  # Normal
+        comp_means = comp.loc  # (..., num_modes, action_dim)
+        comp_scales = comp.scale
+
+        mixture_mean = (mix_probs.unsqueeze(-1) * comp_means).sum(dim=-2)
+        action_mse = ((mixture_mean - data["actions"]) ** 2).mean()
+        mean_log_std = torch.log(comp_scales + 1e-8).mean()
+
+        gmm_loss = loss.mean() if loss.ndim > 0 else loss
+        stats = {
+            "gmm_loss": gmm_loss,
+            "action_mse": action_mse,
+            "mean_log_std": mean_log_std,
+        }
+        return loss, stats
 
     def reset(self):
         """
