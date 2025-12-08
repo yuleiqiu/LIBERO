@@ -217,6 +217,8 @@ def main():
             print(f"[warning] failed to read anchors meta {anchors_meta}: {e}")
 
     n_eval_cfg = getattr(cfg.eval, "n_eval", 20)
+    anchor_success = defaultdict(int)
+    anchor_trials = defaultdict(int)
 
     def build_rollout_order(anchor_idx_list, total_len, target_n):
         if not anchor_idx_list:
@@ -293,6 +295,15 @@ def main():
             dones[k] = True  # ignore padded envs
         steps = 0
 
+        anchor_ids = None
+        if anchor_indices:
+            anchor_ids = [
+                anchor_indices[idx] if idx < len(anchor_indices) else None for idx in indices
+            ]
+            for k in range(remaining):
+                if anchor_ids[k] is not None:
+                    anchor_trials[anchor_ids[k]] += 1
+
         while steps < max_steps:
             steps += 1
             data = raw_obs_to_tensor_obs(obs, task_emb, cfg)
@@ -301,6 +312,8 @@ def main():
 
             if env_num == 1 and done:
                 successes += 1
+                if anchor_ids and anchor_ids[0] is not None:
+                    anchor_success[anchor_ids[0]] += 1
             elif env_num > 1:
                 for k in range(env_num):
                     dones[k] = dones[k] or done[k]
@@ -321,6 +334,10 @@ def main():
 
         if env_num > 1:
             successes += sum(int(dones[k]) for k in range(remaining))
+            if anchor_ids:
+                for k in range(remaining):
+                    if dones[k] and anchor_ids[k] is not None:
+                        anchor_success[anchor_ids[k]] += 1
 
         batch_success = successes - prev_successes
         batch_success_counts.append(f"{batch_success}/{remaining}")
@@ -335,11 +352,17 @@ def main():
 
     sr = successes / n_eval
     batch_str = ", ".join(batch_success_counts)
-    print(
-        "[info] rollout success: "
-        f"batches {batch_str} | total {successes}/{n_eval} ({sr:.3f}) across {n_eval} episodes; "
-        f"envs per batch: {env_num}"
-    )
+    print("[info] rollout summary:")
+    print(f"  {n_eval} rollouts in {eval_loop_num} runs; {env_num} parallel environments per run")
+    print(f"  success: {successes}/{n_eval} ({sr:.3f})")
+    print(f"  success per run: {batch_str}")
+    if anchor_indices:
+        print("  per-anchor success:")
+        for a in sorted(anchor_trials):
+            trials = anchor_trials[a]
+            suc = anchor_success.get(a, 0)
+            rate = suc / max(trials, 1)
+            print(f"    anchor {a}: {suc}/{trials} ({rate:.3f})")
 
 
 if __name__ == "__main__":
