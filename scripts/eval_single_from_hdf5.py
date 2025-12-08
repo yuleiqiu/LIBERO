@@ -252,6 +252,8 @@ def main():
     record_envs = min(args.save_videos, env_num)
     save_video = record_envs > 0
     video_writer = None
+    # Track per-env recording state so we stop appending frames once that env finishes.
+    record_active = [True] * record_envs if save_video else []
     if save_video:
         ckpt_dir = Path(args.checkpoint).expanduser().resolve().parent
         video_dir = ckpt_dir / "rollout_videos"
@@ -325,9 +327,12 @@ def main():
                     video_writer.append_obs(obs, done=done, idx=0)
                 else:
                     rec = min(record_envs, remaining)
-                    obs_rec = [obs[i] for i in range(rec)]
-                    dones_rec = [dones[i] for i in range(rec)]
-                    video_writer.append_vector_obs(obs_rec, dones_rec, camera_name="agentview_image")
+                    for i in range(rec):
+                        if not record_active[i]:
+                            continue
+                        video_writer.append_obs(obs[i], done=done[i], idx=i, camera_name="agentview_image")
+                        if done[i]:
+                            record_active[i] = False
 
             if env_num == 1 and done:
                 break
