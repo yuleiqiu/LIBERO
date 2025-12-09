@@ -249,11 +249,14 @@ def main():
     eval_loop_num = (n_eval + env_num - 1) // env_num
 
     # Video writer: record only in the first batch, per-env mp4.
-    record_envs = min(args.save_videos, env_num)
-    save_video = record_envs > 0
+    max_record_videos = min(args.save_videos, n_eval)
+    save_video = max_record_videos > 0
     video_writer = None
-    # Track per-env recording state so we stop appending frames once that env finishes.
-    record_active = [True] * record_envs if save_video else []
+    # Track per-env recording state so we can append a short tail after done+open-gripper.
+    record_active = [False] * env_num if save_video else []
+    record_tail = [None] * env_num if save_video else []
+    video_ids = [None] * env_num if save_video else []
+    tail_after_done = 10
     if save_video:
         ckpt_dir = Path(args.checkpoint).expanduser().resolve().parent
         video_dir = ckpt_dir / "rollout_videos"
@@ -305,37 +308,75 @@ def main():
             for k in range(remaining):
                 if anchor_ids[k] is not None:
                     anchor_trials[anchor_ids[k]] += 1
+        single_env_done = False
+        if save_video:
+            # Reset per-env recording state for this batch.
+            record_active = [False] * env_num
+            record_tail = [None] * env_num
+            video_ids = [None] * env_num
+            # Assign recording slots to the next episodes that still need videos.
+            rec_slots = max_record_videos - episodes_done
+            rec = max(0, min(rec_slots, remaining))
+            for i in range(rec):
+                record_active[i] = True
+                record_tail[i] = None
+                video_ids[i] = episodes_done + i
 
         while steps < max_steps:
             steps += 1
             data = raw_obs_to_tensor_obs(obs, task_emb, cfg)
             actions = algo.policy.get_action(data)
+            if torch.is_tensor(actions):
+                actions_np = actions.detach().cpu().numpy()
+            else:
+                actions_np = np.asarray(actions)
+            if env_num == 1 and actions_np.ndim == 1:
+                actions_np = actions_np[None]
             obs, reward, done, info = env.step(actions)
+            done_array = np.asarray(done)
 
-            if env_num == 1 and done:
+            if env_num == 1 and bool(done_array.item()) and not single_env_done:
                 successes += 1
                 if anchor_ids and anchor_ids[0] is not None:
                     anchor_success[anchor_ids[0]] += 1
+                single_env_done = True
             elif env_num > 1:
                 for k in range(env_num):
                     dones[k] = dones[k] or done[k]
-                if all(dones):
+                if all(dones) and (not save_video or not any(record_active)):
                     break
 
-            if video_writer and loop_idx == 0:
-                if env_num == 1:
-                    video_writer.append_obs(obs, done=done, idx=0)
-                else:
-                    rec = min(record_envs, remaining)
-                    for i in range(rec):
-                        if not record_active[i]:
-                            continue
-                        video_writer.append_obs(obs[i], done=done[i], idx=i, camera_name="agentview_image")
-                        if done[i]:
+            if video_writer:
+                rec = 1 if env_num == 1 else min(env_num, remaining)
+                for i in range(rec):
+                    if not record_active[i] or video_ids[i] is None:
+                        continue
+                    done_flag = bool(done_array.item()) if env_num == 1 else bool(done[i])
+                    gripper_open = False
+                    if actions_np.ndim == 2 and i < actions_np.shape[0]:
+                        gripper_open = actions_np[i, -1] < 0
+                    elif actions_np.ndim == 1:
+                        gripper_open = actions_np[-1] < 0
+                    video_writer.append_obs(
+                        obs if env_num == 1 else obs[i],
+                        done=done_flag,
+                        idx=video_ids[i],
+                        camera_name="agentview_image",
+                    )
+                    if done_flag and gripper_open and record_tail[i] is None:
+                        record_tail[i] = tail_after_done
+                    if record_tail[i] is not None:
+                        record_tail[i] -= 1
+                        if record_tail[i] < 0:
                             record_active[i] = False
 
-            if env_num == 1 and done:
-                break
+            if env_num == 1 and single_env_done:
+                tail_active = (
+                    save_video
+                    and record_active[0]
+                )
+                if not tail_active:
+                    break
 
         if env_num > 1:
             successes += sum(int(dones[k]) for k in range(remaining))
