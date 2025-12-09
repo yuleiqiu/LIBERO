@@ -31,23 +31,10 @@ class VideoWriter:
         if self.save_video:
             if idx not in self.image_buffer:
                 self.image_buffer[idx] = []
-            if idx not in self.last_images:
-                self.last_images[idx] = None
-            if not done:
-                self.image_buffer[idx].append(obs[camera_name][::-1])
-            else:
-                if self.last_images[idx] is None:
-                    self.last_images[idx] = obs[camera_name][::-1]
-                original_image = np.copy(self.last_images[idx])
-                blank_image = np.ones_like(original_image) * 128
-                blank_image[:, :, 0] = 0
-                blank_image[:, :, -1] = 0
-                transparency = 0.7
-                original_image = (
-                    original_image * (1 - transparency) + blank_image * transparency
-                )
-
-                self.image_buffer[idx].append(original_image.astype(np.uint8))
+            # Always record the actual frame; no end-of-episode tinting.
+            frame = obs[camera_name][::-1]
+            self.last_images[idx] = frame
+            self.image_buffer[idx].append(frame)
 
     def reset(self):
         if self.save_video:
