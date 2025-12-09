@@ -48,24 +48,22 @@ class VideoWriter:
     def save(self):
         if self.save_video:
             os.makedirs(self.video_path, exist_ok=True)
-            if self.single_video:
-                video_name = os.path.join(self.video_path, f"video.mp4")
-                video_writer = imageio.get_writer(video_name, fps=self.fps)
-                total_frames = sum(len(self.image_buffer[idx]) for idx in self.image_buffer.keys())
-                with tqdm(total=total_frames, desc=f"writing {video_name}", unit="frame") as pbar:
+            total_videos = 1 if self.single_video else len(self.image_buffer)
+            with tqdm(total=total_videos, desc="writing videos", unit="video") as pbar:
+                if self.single_video:
+                    video_name = os.path.join(self.video_path, f"video.mp4")
+                    video_writer = imageio.get_writer(video_name, fps=self.fps)
                     for idx in self.image_buffer.keys():
                         for im in self.image_buffer[idx]:
                             video_writer.append_data(im)
-                            pbar.update(1)
-                video_writer.close()
-            else:
-                for idx in self.image_buffer.keys():
-                    video_name = os.path.join(self.video_path, f"{idx}.mp4")
-                    video_writer = imageio.get_writer(video_name, fps=self.fps)
-                    frames = self.image_buffer[idx]
-                    with tqdm(total=len(frames), desc=f"writing {video_name}", unit="frame") as pbar:
-                        for im in frames:
-                            video_writer.append_data(im)
-                            pbar.update(1)
                     video_writer.close()
+                    pbar.update(1)
+                else:
+                    for idx in sorted(self.image_buffer.keys()):
+                        video_name = os.path.join(self.video_path, f"{idx}.mp4")
+                        video_writer = imageio.get_writer(video_name, fps=self.fps)
+                        for im in self.image_buffer[idx]:
+                            video_writer.append_data(im)
+                        video_writer.close()
+                        pbar.update(1)
             print(f"Saved videos to {self.video_path}.")
