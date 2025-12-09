@@ -256,7 +256,7 @@ def main():
     record_active = [False] * env_num if save_video else []
     record_tail = [None] * env_num if save_video else []
     video_ids = [None] * env_num if save_video else []
-    tail_after_done = 10
+    tail_after_done = 30
     if save_video:
         ckpt_dir = Path(args.checkpoint).expanduser().resolve().parent
         video_dir = ckpt_dir / "rollout_videos"
