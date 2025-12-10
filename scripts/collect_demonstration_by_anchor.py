@@ -374,7 +374,7 @@ def collect_scripted_trajectory(
 
 
 def gather_demonstrations_as_hdf5(
-    directory, out_dir, env_info, args, remove_directory=[], anchor_idx=None
+    directory, out_dir, env_info, args, remove_directory=None, anchor_idx=None, anchor_map=None
 ):
     hdf5_path = os.path.join(out_dir, "demo.hdf5")
     f = h5py.File(hdf5_path, "w")
@@ -384,7 +384,10 @@ def gather_demonstrations_as_hdf5(
     num_eps = 0
     env_name = None
 
-    for ep_directory in os.listdir(directory):
+    remove_directory = remove_directory or []
+    anchor_map = anchor_map or {}
+
+    for ep_directory in sorted(os.listdir(directory)):
         if ep_directory in remove_directory:
             continue
         state_paths = os.path.join(directory, ep_directory, "state_*.npz")
@@ -415,8 +418,10 @@ def gather_demonstrations_as_hdf5(
 
         ep_data_grp.create_dataset("states", data=np.array(states))
         ep_data_grp.create_dataset("actions", data=np.array(actions))
-        if anchor_idx is not None:
-            ep_data_grp.attrs["anchor_idx"] = int(anchor_idx)
+        # Prefer per-episode anchor from anchor_map; fall back to current anchor_idx arg.
+        anchor_val = anchor_map.get(ep_directory, anchor_idx)
+        if anchor_val is not None:
+            ep_data_grp.attrs["anchor_idx"] = int(anchor_val)
 
     now = datetime.datetime.now()
     grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
@@ -524,6 +529,7 @@ if __name__ == "__main__":
     anchor_counts = {idx: 0 for idx in range(len(anchor_ranges))}
     total_needed = args.per_anchor * len(anchor_ranges)
     collected = 0
+    anchor_map = {}
 
     while collected < total_needed:
         current_anchor, saving = collect_scripted_trajectory(
@@ -547,6 +553,8 @@ if __name__ == "__main__":
             remove_directory.append(env.ep_directory.split("/")[-1])
             continue
 
+        # Record the anchor for this episode directory so we persist correct metadata when saving.
+        anchor_map[env.ep_directory.split("/")[-1]] = current_anchor
         anchor_counts[current_anchor] += 1
         gather_demonstrations_as_hdf5(
             tmp_directory,
@@ -555,6 +563,7 @@ if __name__ == "__main__":
             args,
             remove_directory,
             anchor_idx=current_anchor,
+            anchor_map=anchor_map,
         )
         collected += 1
         print(
