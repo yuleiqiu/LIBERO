@@ -33,6 +33,18 @@ def main():
     parser.add_argument('--render-size', type=int, default=256, help='Square camera render size')
     parser.add_argument('--output-size', type=int, default=640, help='Side length (pixels) of saved visualizations')
     parser.add_argument('--stack-alpha', type=float, default=0.35, help='Transparency for stacked overlay (0-1)')
+    parser.add_argument(
+        '--bddl-file',
+        type=str,
+        default=None,
+        help='Optional path to a BDDL file. Defaults to the benchmark/task mapping when omitted.',
+    )
+    parser.add_argument(
+        '--init-states-path',
+        type=str,
+        default=None,
+        help='Optional path to init_states file or directory containing one (e.g., .init/.pruned_init/.pt).',
+    )
     args = parser.parse_args()
     benchmark_instance = benchmark_dict[args.benchmark]()
 
@@ -40,14 +52,50 @@ def main():
     task = benchmark_instance.get_task(task_id)
     pp.pprint(task)
     print("============================================================")
+
+    # Resolve BDDL file
+    if args.bddl_file:
+        bddl_path = os.path.expanduser(args.bddl_file)
+    else:
+        bddl_path = os.path.join(bddl_files_default_path, task.problem_folder, task.bddl_file)
+    if not os.path.exists(bddl_path):
+        raise FileNotFoundError(f"BDDL file not found: {bddl_path}")
+
+    def resolve_init_states_path(path):
+        """Return a concrete init_states file path from a file or directory input."""
+        candidate_path = os.path.expanduser(path)
+        if os.path.isdir(candidate_path):
+            candidates = [
+                fname
+                for fname in os.listdir(candidate_path)
+                if fname.endswith((".init", ".pruned_init", ".pt", ".pth"))
+            ]
+            if not candidates:
+                raise FileNotFoundError(f"No init_states file (.init/.pruned_init/.pt/.pth) found under {candidate_path}")
+            if len(candidates) > 1:
+                raise ValueError(f"Multiple init_states files found under {candidate_path}: {candidates}. Please specify one.")
+            return os.path.join(candidate_path, candidates[0])
+        return candidate_path
+
     env_args = {
-        "bddl_file_name": os.path.join(bddl_files_default_path, task.problem_folder, task.bddl_file),
+        "bddl_file_name": bddl_path,
         "camera_heights": args.render_size,
         "camera_widths": args.render_size
     }
     env = OffScreenRenderEnv(**env_args)
 
-    init_states = benchmark_instance.get_task_init_states(task_id)
+    if args.init_states_path:
+        init_states_file = resolve_init_states_path(args.init_states_path)
+    else:
+        init_states_file = os.path.join(
+            get_libero_path("init_states"),
+            task.problem_folder,
+            task.init_states_file,
+        )
+    if not os.path.exists(init_states_file):
+        raise FileNotFoundError(f"Init states file not found: {init_states_file}")
+
+    init_states = torch.load(init_states_file)
 
     images = []
     env.reset()
