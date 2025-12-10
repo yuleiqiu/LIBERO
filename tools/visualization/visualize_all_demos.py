@@ -22,6 +22,13 @@ def main():
     parser = argparse.ArgumentParser(description='Visualize init states of a LIBERO task')
     parser.add_argument('--task-id', type=int, default=0, help='Task ID to visualize')
     parser.add_argument('--benchmark', type=str, default="libero_object", help='Benchmark name')
+    parser.add_argument(
+        '--hdf5-path',
+        type=str,
+        default=None,
+        help='Optional path to a demonstration hdf5 file or directory containing one. '
+             'Overrides benchmark/task-id lookup when provided.',
+    )
     args = parser.parse_args()
 
     task_id = args.task_id
@@ -30,8 +37,28 @@ def main():
     task = benchmark_instance.get_task(task_id)
     pp.pprint(task)
     print("============================================================")
-    datasets_default_path = get_libero_path("datasets")
-    demo_file = os.path.join(datasets_default_path, benchmark_instance.get_task_demonstration(task_id))
+    if args.hdf5_path:
+        input_path = os.path.expanduser(args.hdf5_path)
+        if os.path.isdir(input_path):
+            hdf5_files = [f for f in os.listdir(input_path) if f.endswith(".hdf5")]
+            if not hdf5_files:
+                raise FileNotFoundError(f"No .hdf5 files found under {input_path}")
+            if len(hdf5_files) > 1:
+                raise ValueError(
+                    f"Multiple .hdf5 files found under {input_path}: {hdf5_files}. "
+                    "Please specify one explicitly."
+                )
+            demo_file = os.path.join(input_path, hdf5_files[0])
+        else:
+            demo_file = input_path
+        print(f"Using provided hdf5 file: {demo_file}")
+    else:
+        datasets_default_path = get_libero_path("datasets")
+        demo_file = os.path.join(datasets_default_path, benchmark_instance.get_task_demonstration(task_id))
+        print(f"Located hdf5 via benchmark/task_id: {demo_file}")
+
+    if not os.path.exists(demo_file):
+        raise FileNotFoundError(f"hdf5 file not found: {demo_file}")
 
     # Create output directory if it doesn't exist
     output_dir = f"libero/datasets/{benchmark_instance.name}/task_{task_id}_demos"
