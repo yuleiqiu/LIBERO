@@ -1,0 +1,13 @@
+policy_type: BCMLPPolicy
+image_embed_size: 64
+text_embed_size: 32
+
+mlp_hidden_size: 512
+mlp_num_layers: 2
+
+defaults:
+    - data_augmentation@color_aug: batch_wise_img_color_jitter_group_aug.yaml
+    - data_augmentation@translation_aug: translation_aug.yaml
+    - image_encoder: resnet_encoder.yaml
+    - language_encoder: mlp_encoder.yaml
+    - policy_head: policy_head/deterministic_head.yaml
