@@ -60,17 +60,21 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
         policy_cfg = cfg.policy
 
         # add data augmentation for rgb inputs
-        color_aug = eval(policy_cfg.color_aug.network)(
-            **policy_cfg.color_aug.network_kwargs
-        )
+        if len(cfg.data.obs.modality.rgb) == 0:
+            # no rgb inputs, skip augmentation
+            self.img_aug = IdentityAug()
+        else:
+            color_aug = eval(policy_cfg.color_aug.network)(
+                **policy_cfg.color_aug.network_kwargs
+            )
 
-        policy_cfg.translation_aug.network_kwargs["input_shape"] = shape_meta[
-            "all_shapes"
-        ][cfg.data.obs.modality.rgb[0]]
-        translation_aug = eval(policy_cfg.translation_aug.network)(
-            **policy_cfg.translation_aug.network_kwargs
-        )
-        self.img_aug = DataAugGroup((color_aug, translation_aug))
+            policy_cfg.translation_aug.network_kwargs["input_shape"] = shape_meta[
+                "all_shapes"
+            ][cfg.data.obs.modality.rgb[0]]
+            translation_aug = eval(policy_cfg.translation_aug.network)(
+                **policy_cfg.translation_aug.network_kwargs
+            )
+            self.img_aug = DataAugGroup((color_aug, translation_aug))
 
     def forward(self, data):
         """
@@ -85,10 +89,9 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
         raise NotImplementedError
 
     def _get_img_tuple(self, data):
-        img_tuple = tuple(
-            [data["obs"][img_name] for img_name in self.image_encoders.keys()]
-        )
-        return img_tuple
+        if len(self.image_encoders) == 0:
+            return tuple()
+        return tuple([data["obs"][img_name] for img_name in self.image_encoders.keys()])
 
     def _get_aug_output_dict(self, out):
         img_dict = {
@@ -99,7 +102,7 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
 
     def preprocess_input(self, data, train_mode=True):
         if train_mode:  # apply augmentation
-            if self.cfg.train.use_augmentation:
+            if self.cfg.train.use_augmentation and len(self.image_encoders) > 0:
                 img_tuple = self._get_img_tuple(data)
                 aug_out = self._get_aug_output_dict(self.img_aug(img_tuple))
                 for img_name in self.image_encoders.keys():
@@ -119,21 +122,22 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
         if not return_stats:
             return loss
 
-        mix_probs = dist.mixture_distribution.probs  # (..., num_modes)
-        comp = dist.component_distribution.base_dist  # Normal
-        comp_means = comp.loc  # (..., num_modes, action_dim)
-        comp_scales = comp.scale
-
-        mixture_mean = (mix_probs.unsqueeze(-1) * comp_means).sum(dim=-2)
-        action_mse = ((mixture_mean - data["actions"]) ** 2).mean()
-        mean_log_std = torch.log(comp_scales + 1e-8).mean()
-
-        gmm_loss = loss.mean() if loss.ndim > 0 else loss
-        stats = {
-            "gmm_loss": gmm_loss,
-            "action_mse": action_mse,
-            "mean_log_std": mean_log_std,
-        }
+        stats = {}
+        # GMM stats
+        if hasattr(dist, "mixture_distribution"):
+            mix_probs = dist.mixture_distribution.probs  # (..., num_modes)
+            comp = dist.component_distribution.base_dist  # Normal
+            comp_means = comp.loc  # (..., num_modes, action_dim)
+            comp_scales = comp.scale
+            mixture_mean = (mix_probs.unsqueeze(-1) * comp_means).sum(dim=-2)
+            stats["action_mse"] = ((mixture_mean - data["actions"]) ** 2).mean()
+            stats["mean_log_std"] = torch.log(comp_scales + 1e-8).mean()
+            stats["gmm_loss"] = loss.mean() if loss.ndim > 0 else loss
+        else:
+            mean = dist.mean if hasattr(dist, "mean") else dist
+            stats["action_mse"] = ((mean - data["actions"]) ** 2).mean()
+            if hasattr(dist, "stddev"):
+                stats["mean_log_std"] = torch.log(dist.stddev + 1e-8).mean()
         return loss, stats
 
     def reset(self):

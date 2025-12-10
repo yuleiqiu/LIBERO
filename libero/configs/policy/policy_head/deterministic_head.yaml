@@ -1,0 +1,13 @@
+network: DeterministicHead
+
+network_kwargs:
+    hidden_size: 512
+    num_layers: 2
+    action_squash: true
+    init_std: 0.1
+    min_std: 0.0001
+    learn_std: false
+    low_eval_noise: true
+
+loss_kwargs:
+    loss_coef: 1.0

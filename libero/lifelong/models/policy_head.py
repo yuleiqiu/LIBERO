@@ -6,23 +6,81 @@ import torch.nn.functional as F
 
 
 class DeterministicHead(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size=1024, num_layers=2):
-
+    def __init__(
+        self,
+        # network_kwargs
+        input_size,
+        output_size,
+        hidden_size=1024,
+        num_layers=2,
+        action_squash=False,
+        init_std=0.1,
+        min_std=1e-4,
+        learn_std=False,
+        low_eval_noise=True,
+        # loss_kwargs
+        loss_coef=1.0,
+    ):
         super().__init__()
+        self.action_squash = action_squash
+        self.learn_std = learn_std
+        self.min_std = min_std
+        self.low_eval_noise = low_eval_noise
+        self.loss_coef = loss_coef
+        self.output_size = output_size
+
         sizes = [input_size] + [hidden_size] * num_layers + [output_size]
         layers = []
         for i in range(num_layers):
             layers += [nn.Linear(sizes[i], sizes[i + 1]), nn.ReLU()]
         layers += [nn.Linear(sizes[-2], sizes[-1])]
 
-        if self.action_squash:
-            layers += [nn.Tanh()]
-
         self.net = nn.Sequential(*layers)
+        if self.learn_std:
+            self.log_std = nn.Parameter(torch.ones(output_size) * float(init_std))
+        else:
+            self.register_buffer("fixed_std", torch.ones(1) * float(init_std))
+
+    def _build_dist(self, x):
+        mean = self.net(x)
+        if self.action_squash:
+            mean = torch.tanh(mean)
+
+        if self.learn_std:
+            std = torch.exp(self.log_std).clamp(min=self.min_std)
+        else:
+            std = self.fixed_std.clamp(min=self.min_std)
+        if not self.training and self.low_eval_noise:
+            std = torch.ones_like(mean) * self.min_std
+        else:
+            std = std.expand_as(mean)
+
+        dist = D.Independent(D.Normal(loc=mean, scale=std), 1)
+        return dist
+
+    def forward_fn(self, x):
+        return self._build_dist(x)
 
     def forward(self, x):
-        y = self.net(x)
-        return y
+        if x.ndim == 3:
+            return TensorUtils.time_distributed(x, self.forward_fn)
+        return self._build_dist(x)
+
+    def loss_fn(self, pred, target, reduction="mean"):
+        if isinstance(pred, D.Distribution):
+            mean = pred.mean
+        else:
+            mean = pred
+        loss = (mean - target).pow(2)
+        if reduction == "mean":
+            loss = loss.mean()
+        elif reduction == "sum":
+            loss = loss.sum()
+        elif reduction == "none":
+            pass
+        else:
+            raise NotImplementedError
+        return loss * self.loss_coef
 
 
 class GMMHead(nn.Module):
