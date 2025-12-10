@@ -83,10 +83,10 @@ class BasePolicy:
     def __call__(self, target_pos, destination_pos, current_eef_pos):
         if self.step_count == 0:
             self.generate_trajectory(target_pos, destination_pos)
-            if self.debug:
-                print("[debug] Generated trajectory:")
-                for wp in self.trajectory:
-                    print(f"  t={wp['t']}, xyz={wp['xyz']}, grip={wp['gripper']}")
+            # if self.debug:
+            #     print("[debug] Generated trajectory:")
+            #     for wp in self.trajectory:
+            #         print(f"  t={wp['t']}, xyz={wp['xyz']}, grip={wp['gripper']}")
 
         while self.trajectory and self.trajectory[0]["t"] <= self.step_count:
             self.curr_waypoint = self.trajectory.pop(0)
@@ -250,7 +250,23 @@ class RandomizedPickAndPlacePolicy(BasePolicy):
         self.trajectory = waypoints
 
 
-def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], debug=False):
+def collect_scripted_trajectory(
+    env,
+    tol,
+    ranges,
+    centers,
+    remove_directory=[],
+    debug=False,
+    collision_watch=None,
+):
+    collision_watch = collision_watch or []
+    base_env = env
+    for _ in range(3):
+        if hasattr(base_env, "env"):
+            base_env = base_env.env
+        else:
+            break
+
     reset_success = False
     obs = None
     while not reset_success:
@@ -298,6 +314,29 @@ def collect_scripted_trajectory(env, tol, ranges, centers, remove_directory=[], 
 
         obs, _, success, _ = env.step(action)
         env.render()
+
+        if debug:
+            contact_hits = []
+            try:
+                gripper = base_env.robots[0].gripper
+                for name in collision_watch:
+                    obj = base_env.get_object(name)
+                    if base_env.check_contact(gripper, obj):
+                        contact_hits.append(name)
+            except Exception:
+                pass
+
+            contact_parts = []
+            try:
+                contact_parts.append(f"ncon={int(base_env.sim.data.ncon)}")
+            except Exception:
+                pass
+            if contact_hits:
+                contact_parts.append(
+                    "gripper hits " + ", ".join(sorted(set(contact_hits)))
+                )
+            if contact_parts:
+                print(f"[debug][contact] {' | '.join(contact_parts)}")
 
         if not success and getattr(policy, "trajectory", []) == []:
             fail_reason = "trajectory_exhausted"
@@ -494,6 +533,12 @@ if __name__ == "__main__":
             anchor_centers,
             remove_directory,
             debug=args.debug_trajectory,
+            collision_watch=[
+                name
+                for names in parsed["objects"].values()
+                for name in names
+                if name not in set(parsed["obj_of_interest"])
+            ],
         )
         if not saving or current_anchor is None:
             continue
