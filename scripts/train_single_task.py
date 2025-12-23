@@ -7,6 +7,7 @@ from pathlib import Path
 import h5py
 import torch
 import yaml
+import numpy as np
 import wandb
 from easydict import EasyDict
 from hydra import compose, initialize_config_dir
@@ -18,7 +19,13 @@ from tqdm import tqdm
 import init_path  # noqa: F401
 from libero.libero import get_libero_path
 from libero.lifelong.algos import get_algo_class
-from libero.lifelong.datasets import SequenceVLDataset, get_dataset
+from libero.lifelong.datasets import (
+    SequenceVLDataset,
+    get_dataset,
+    load_obs_normalization_stats,
+    save_obs_normalization_stats,
+    expand_obs_normalization_stats,
+)
 from libero.lifelong.utils import control_seed, create_experiment_dir, get_task_embs, safe_device, torch_save_model
 
 
@@ -39,12 +46,75 @@ def read_language_from_hdf5(hdf5_path: str) -> str:
     return problem_info["language_instruction"]
 
 
+def compute_obs_stats_from_indices(sequence_dataset, indices):
+    """
+    Compute mean / std from sequence_dataset using only the provided indices.
+    """
+    if not indices:
+        raise ValueError("Cannot compute obs stats with an empty index list")
+
+    def compute_seq_stats(obs_dict):
+        seq_stats = {k: {} for k in obs_dict}
+        for k, obs in obs_dict.items():
+            obs = obs.astype(np.float32, copy=False)
+            n = obs.shape[0]
+            mean = obs.mean(axis=0, keepdims=True, dtype=np.float32)
+            sqdiff = ((obs - mean) ** 2).sum(axis=0, keepdims=True, dtype=np.float32)
+            seq_stats[k]["n"] = n
+            seq_stats[k]["mean"] = mean
+            seq_stats[k]["sqdiff"] = sqdiff
+        return seq_stats
+
+    def merge_stats(stats_a, stats_b):
+        merged = {}
+        for k in stats_a:
+            n_a, mean_a, m2_a = (
+                stats_a[k]["n"],
+                stats_a[k]["mean"],
+                stats_a[k]["sqdiff"],
+            )
+            n_b, mean_b, m2_b = (
+                stats_b[k]["n"],
+                stats_b[k]["mean"],
+                stats_b[k]["sqdiff"],
+            )
+            n = n_a + n_b
+            mean = (n_a * mean_a + n_b * mean_b) / n
+            delta = mean_b - mean_a
+            m2 = m2_a + m2_b + (delta**2) * (n_a * n_b) / n
+            merged[k] = {"n": n, "mean": mean, "sqdiff": m2}
+        return merged
+
+    merged_stats = None
+    for idx in tqdm(indices, desc="compute obs stats", leave=True):
+        obs = sequence_dataset[idx]["obs"]
+        seq_stats = compute_seq_stats(obs)
+        merged_stats = seq_stats if merged_stats is None else merge_stats(merged_stats, seq_stats)
+
+    obs_stats = {}
+    for k, stats in merged_stats.items():
+        mean = stats["mean"].astype(np.float32, copy=False)
+        sqdiff = stats["sqdiff"].astype(np.float32, copy=False)
+        sqdiff = np.maximum(sqdiff, np.float32(0.0))
+        denom = np.float32(stats["n"])
+        std = np.sqrt(sqdiff / denom).astype(np.float32, copy=False)
+        std = std + np.float32(1e-3)
+        if not (np.isfinite(mean).all() and np.isfinite(std).all()):
+            raise AssertionError(
+                f"non-finite obs stats for key '{k}': "
+                f"mean finite={np.isfinite(mean).all()}, std finite={np.isfinite(std).all()}"
+            )
+        obs_stats[k] = {"mean": mean, "std": std}
+    return obs_stats
+
+
 def train_single_task(cfg: EasyDict,
                       dataset: SequenceVLDataset,
                       task_emb: torch.Tensor,
                       save_dir: str,
                       train_ratio: float,
                       val_ratio: float,
+                      dataset_path: str,
                       ckpt_mode: str,
                       ckpt_interval: int
                     ) -> None:
@@ -90,6 +160,31 @@ def train_single_task(cfg: EasyDict,
             }
         )
 
+    if getattr(cfg.data, "normalize_obs", False):
+        load_path = getattr(cfg.data, "obs_norm_stats_path", None)
+        save_path = getattr(cfg.data, "save_obs_norm_stats_path", None)
+        if load_path is None and save_path is None:
+            default_stats = Path(save_dir) / "obs_stats.json"
+            load_path = default_stats
+            save_path = default_stats
+        elif save_path is None:
+            save_path = load_path
+
+        sequence_dataset = dataset.sequence_dataset
+        norm_stats = None
+        if load_path is not None and os.path.exists(os.path.expanduser(str(load_path))):
+            norm_stats = load_obs_normalization_stats(load_path)
+        else:
+            norm_stats = compute_obs_stats_from_indices(sequence_dataset, train_idx)
+            if save_path is not None:
+                save_obs_normalization_stats(save_path, norm_stats)
+
+        applied_stats = expand_obs_normalization_stats(
+            norm_stats, sequence_dataset.seq_length, sequence_dataset.n_frame_stack
+        )
+        sequence_dataset.obs_normalization_stats = applied_stats
+        sequence_dataset.hdf5_normalize_obs = True
+
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
 
@@ -99,6 +194,7 @@ def train_single_task(cfg: EasyDict,
         num_workers=cfg.train.num_workers,
         sampler=RandomSampler(train_dataset),
         persistent_workers=True,
+        pin_memory=True,
     )
     val_loader = None
     if len(val_dataset) > 0:
@@ -108,7 +204,11 @@ def train_single_task(cfg: EasyDict,
             num_workers=0,
             shuffle=False,
             persistent_workers=False,
+            pin_memory=True,
         )
+
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
 
     best_loss = float("inf")
     model_best_path = os.path.join(save_dir, "model_best.pth")
@@ -325,7 +425,7 @@ def train_single_task(cfg: EasyDict,
             wandb.run.summary["ckpt_path"] = final_ckpt
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Single-task training directly from HDF5")
     parser.add_argument("--demo-file", required=True, help="Path to processed *_demo.hdf5")
     parser.add_argument(
@@ -352,7 +452,7 @@ def main():
         default=0,
         help="CUDA device id (e.g., 0 -> cuda:0)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cfg = load_cfg(args.config_override)
     cfg.device = f"cuda:{args.device_id}"
@@ -405,6 +505,7 @@ def main():
         cfg.experiment_dir,
         train_ratio,
         val_ratio,
+        str(demo_path),
         args.ckpt_mode,
         args.ckpt_interval,
     )
