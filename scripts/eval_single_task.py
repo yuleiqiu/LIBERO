@@ -19,7 +19,11 @@ from tqdm import tqdm
 import init_path  # noqa: F401
 from libero.libero import get_libero_path
 from libero.lifelong.algos import get_algo_class
-from libero.lifelong.datasets import SequenceVLDataset, get_dataset
+from libero.lifelong.datasets import (
+    SequenceVLDataset,
+    get_dataset,
+    load_obs_normalization_stats,
+)
 from libero.lifelong.metric import raw_obs_to_tensor_obs
 from libero.lifelong.utils import control_seed, safe_device, torch_load_model
 from libero.libero.utils.video_utils import VideoWriter
@@ -52,6 +56,18 @@ def easydict_to_plain(d):
     if isinstance(d, dict):
         return {k: easydict_to_plain(v) for k, v in d.items()}
     return d
+
+
+def resolve_stats_path(demo_path: Path, cfg: EasyDict, checkpoint_path: Path = None):
+    stats_path = getattr(cfg.data, "obs_norm_stats_path", None)
+    if stats_path is None:
+        stats_path = getattr(cfg.data, "save_obs_norm_stats_path", None)
+    if stats_path is None:
+        if checkpoint_path is not None:
+            stats_path = checkpoint_path.parent / "obs_stats.json"
+        else:
+            stats_path = demo_path.with_name(f"{demo_path.stem}_obs_stats.json")
+    return stats_path
 
 
 def main():
@@ -126,12 +142,31 @@ def main():
     cfg.bddl_folder = cfg.bddl_folder or get_libero_path("bddl_files")
     cfg.init_states_folder = cfg.init_states_folder or get_libero_path("init_states")
 
+    obs_norm_stats_path = getattr(cfg.data, "obs_norm_stats_path", None)
+    save_obs_norm_stats_path = getattr(
+        cfg.data, "save_obs_norm_stats_path", obs_norm_stats_path
+    )
+    normalize_obs = getattr(cfg.data, "normalize_obs", False)
+    require_obs_stats = getattr(cfg.data, "require_obs_stats", False)
+    ckpt_path = Path(args.checkpoint).expanduser().resolve()
+    stats_path = resolve_stats_path(demo_path, cfg, ckpt_path) if normalize_obs else None
+    if normalize_obs and require_obs_stats:
+        if stats_path is None or not os.path.exists(os.path.expanduser(str(stats_path))):
+            raise FileNotFoundError(
+                f"obs stats not found: {stats_path}. "
+                "Run training to generate stats, or set data.obs_norm_stats_path "
+                f"to an existing JSON (default: {stats_path})."
+            )
+
     # Build dataset
     base_dataset, shape_meta = get_dataset(
         dataset_path=str(demo_path),
         obs_modality=cfg.data.obs.modality,
         initialize_obs_utils=True,
         seq_len=cfg.data.seq_len,
+        normalize_obs=normalize_obs,
+        obs_norm_stats_path=stats_path or obs_norm_stats_path,
+        save_obs_norm_stats_path=save_obs_norm_stats_path,
     )
 
     task_emb = build_task_emb(cfg)
@@ -141,6 +176,10 @@ def main():
     algo = safe_device(algo_cls(n_tasks=1, cfg=cfg), cfg.device)
     algo.policy.load_state_dict(state_dict)
     algo.policy.eval()
+
+    obs_stats = None
+    if normalize_obs and stats_path and os.path.exists(os.path.expanduser(str(stats_path))):
+        obs_stats = load_obs_normalization_stats(stats_path)
 
     # Optional loss evaluation
     if args.loss:
@@ -166,6 +205,7 @@ def main():
                     num_workers=getattr(cfg.eval, "num_workers", 4),
                     shuffle=False,
                     persistent_workers=False,
+                    pin_memory=True,
                 )
                 losses = []
                 with torch.no_grad():
@@ -325,6 +365,18 @@ def main():
         while steps < max_steps:
             steps += 1
             data = raw_obs_to_tensor_obs(obs, task_emb, cfg)
+            if normalize_obs and obs_stats is not None:
+                for key, value in data["obs"].items():
+                    stats = obs_stats.get(key)
+                    if stats is None:
+                        continue
+                    mean = torch.as_tensor(
+                        stats["mean"], device=value.device, dtype=value.dtype
+                    )
+                    std = torch.as_tensor(
+                        stats["std"], device=value.device, dtype=value.dtype
+                    )
+                    data["obs"][key] = (value - mean) / std
             actions = algo.policy.get_action(data)
             if torch.is_tensor(actions):
                 actions_np = actions.detach().cpu().numpy()
