@@ -1,0 +1,22 @@
+data:
+  demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
+  obs_keys: "joint_states,gripper_states"
+  image_keys: "agentview_rgb,eye_in_hand_rgb"
+  obs_horizon: 8
+  predict_horizon: 4
+  normalize_obs: true
+  obs_stats_path: null
+  train_ratio: 0.9
+  val_ratio: 0.1
+  seed: 10000
+model:
+  hidden_dims: [256, 256]
+  action_squash: true
+  image_embed_dim: 128
+  image_encoder_pretrained: false
+  image_encoder_remove_layer_num: 2
+  image_encoder_no_stride: false
+ckpt: "standalone/standalone_runs/run_001/model_last.pt"
+split_path: "standalone/standalone_runs/run_001/split_indices.json"
+batch_size: 32
+device: "cuda:0"
