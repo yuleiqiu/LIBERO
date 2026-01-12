@@ -1,4 +1,3 @@
-import argparse
 import json
 import os
 from pathlib import Path
@@ -8,46 +7,25 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, Subset
 from tqdm import tqdm
 
+try:
+    import draccus
+except ImportError as exc:
+    raise ImportError("draccus is required; install with `pip install draccus`.") from exc
+
+from standalone.configs import TrainConfig
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
     load_obs_stats,
     save_obs_stats,
 )
-from standalone.models.mlp_policy import MLPPolicy
+from standalone.models.policy.mlp_policy import MLPPolicy
 
 
 def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Standalone MLP training")
-    parser.add_argument("--demo-file", required=True, help="Path to *_demo.hdf5")
-    parser.add_argument(
-        "--obs-keys",
-        default="gripper_states,joint_states",
-        help="Comma-separated obs keys to use",
-    )
-    parser.add_argument("--obs-horizon", type=int, default=1)
-    parser.add_argument("--predict-horizon", type=int, default=1)
-    parser.add_argument("--exec-horizon", type=int, default=None)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--seed", type=int, default=10000)
-    parser.add_argument("--train-ratio", type=float, default=0.9)
-    parser.add_argument("--val-ratio", type=float, default=0.1)
-    parser.add_argument("--normalize-obs", action="store_true")
-    parser.add_argument("--obs-stats-path", type=str, default=None)
-    parser.add_argument(
-        "--save-dir", type=str, default="standalone/standalone_runs/run_001"
-    )
-    parser.add_argument("--grad-clip", type=float, default=None)
-    return parser.parse_args()
 
 
 def build_splits(dataset_len, train_ratio, val_ratio, seed):
@@ -62,47 +40,56 @@ def build_splits(dataset_len, train_ratio, val_ratio, seed):
     return train_idx, val_idx, eval_idx
 
 
-def main():
-    args = parse_args()
-    set_seed(args.seed)
+@draccus.wrap()
+def main(cfg: TrainConfig):
+    if not cfg.data.demo_file:
+        raise ValueError("data.demo_file is required")
+    set_seed(cfg.data.seed)
 
-    demo_path = Path(args.demo_file).expanduser().resolve()
+    demo_path = Path(cfg.data.demo_file).expanduser().resolve()
     if not demo_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {demo_path}")
 
-    obs_keys = [k.strip() for k in args.obs_keys.split(",") if k.strip()]
+    obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
+    image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
+    all_keys = obs_keys + image_keys
 
-    save_dir = Path(args.save_dir).expanduser().resolve()
+    save_dir = Path(cfg.save_dir).expanduser().resolve()
     save_dir.mkdir(parents=True, exist_ok=True)
     split_path = save_dir / "split_indices.json"
 
-    device = args.device if torch.cuda.is_available() else "cpu"
+    device = cfg.device if torch.cuda.is_available() else "cpu"
 
     base_dataset = HDF5SequenceDataset(
         hdf5_path=str(demo_path),
-        obs_keys=obs_keys,
-        obs_horizon=args.obs_horizon,
-        predict_horizon=args.predict_horizon,
+        obs_keys=all_keys,
+        obs_horizon=cfg.data.obs_horizon,
+        predict_horizon=cfg.data.predict_horizon,
     )
 
     train_idx, val_idx, eval_idx = build_splits(
-        len(base_dataset), args.train_ratio, args.val_ratio, args.seed
+        len(base_dataset), cfg.data.train_ratio, cfg.data.val_ratio, cfg.data.seed
     )
     with open(split_path, "w") as f:
         json.dump({"train": train_idx, "val": val_idx, "eval": eval_idx}, f, indent=2)
 
     obs_stats = None
-    if args.normalize_obs:
+    if cfg.data.normalize_obs:
         stats_path = (
-            Path(args.obs_stats_path).expanduser().resolve()
-            if args.obs_stats_path
+            Path(cfg.data.obs_stats_path).expanduser().resolve()
+            if cfg.data.obs_stats_path
             else save_dir / "obs_stats.json"
         )
         if stats_path.exists():
             obs_stats = load_obs_stats(stats_path)
         else:
-            obs_stats = compute_obs_stats(base_dataset, train_idx)
+            obs_stats = compute_obs_stats(
+                base_dataset, train_idx, ignore_keys=image_keys
+            )
             save_obs_stats(stats_path, obs_stats)
+        if obs_stats is not None and image_keys:
+            for key in image_keys:
+                obs_stats.pop(key, None)
         base_dataset.set_obs_stats(obs_stats)
 
     train_dataset = Subset(base_dataset, train_idx)
@@ -110,7 +97,7 @@ def main():
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=cfg.batch_size,
         sampler=RandomSampler(train_dataset),
         num_workers=0,
         pin_memory=torch.cuda.is_available(),
@@ -119,7 +106,7 @@ def main():
     if len(val_dataset) > 0:
         val_loader = DataLoader(
             val_dataset,
-            batch_size=args.batch_size,
+            batch_size=cfg.batch_size,
             shuffle=False,
             num_workers=0,
             pin_memory=torch.cuda.is_available(),
@@ -127,20 +114,34 @@ def main():
 
     sample = base_dataset[train_idx[0]]
     obs_dim = sum(np.prod(sample["obs"][k].shape) for k in obs_keys)
+    image_shapes = {}
+    for key in image_keys:
+        if key not in sample["obs"]:
+            raise KeyError(f"image key not found in obs: {key}")
+        image_shapes[key] = sample["obs"][key].shape[1:]
+        obs_dim += sample["obs"][key].shape[0] * cfg.model.image_embed_dim
     act_shape = sample["actions"].shape
     action_dim = act_shape[-1]
     model = MLPPolicy(
         input_dim=obs_dim,
         action_dim=action_dim,
-        predict_horizon=args.predict_horizon,
-        exec_horizon=args.exec_horizon,
+        predict_horizon=cfg.data.predict_horizon,
+        exec_horizon=cfg.model.exec_horizon,
+        hidden_dims=cfg.model.hidden_dims,
+        action_squash=cfg.model.action_squash,
         obs_keys=obs_keys,
+        image_keys=image_keys,
+        image_shapes=image_shapes,
+        image_embed_dim=cfg.model.image_embed_dim,
+        image_encoder_pretrained=cfg.model.image_encoder_pretrained,
+        image_encoder_remove_layer_num=cfg.model.image_encoder_remove_layer_num,
+        image_encoder_no_stride=cfg.model.image_encoder_no_stride,
     )
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
 
     printed_batch = False
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, cfg.epochs + 1):
         model.train()
         train_losses = []
         for batch in tqdm(train_loader, desc=f"train epoch {epoch}"):
@@ -178,8 +179,8 @@ def main():
 
             optimizer.zero_grad()
             loss.backward()
-            if args.grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            if cfg.grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
             train_losses.append(loss.item())
 

@@ -115,14 +115,17 @@ def load_obs_stats(path):
     }
 
 
-def compute_obs_stats(dataset, indices, eps=1e-3):
+def compute_obs_stats(dataset, indices, eps=1e-3, ignore_keys=None):
     sums = {}
     sumsq = {}
     counts = {}
+    ignore_keys = set(ignore_keys or [])
 
     for idx in tqdm(indices, desc="compute obs stats", leave=True):
         sample = dataset[idx]
         for key, value in sample["obs"].items():
+            if key in ignore_keys:
+                continue
             value = value.astype(np.float32, copy=False)
             sums.setdefault(key, 0.0)
             sumsq.setdefault(key, 0.0)
