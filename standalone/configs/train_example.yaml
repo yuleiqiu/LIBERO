@@ -4,19 +4,13 @@ data:
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 8
   predict_horizon: 4
-  normalize_obs: true
+  normalize_obs: false
   obs_stats_path: null
   train_ratio: 0.9
   val_ratio: 0.1
   seed: 10000
-model:
-  hidden_dims: [256, 256]
-  action_squash: true
-  exec_horizon: 2
-  image_embed_dim: 128
-  image_encoder_pretrained: false
-  image_encoder_remove_layer_num: 2
-  image_encoder_no_stride: false
+policy:
+  config_path: standalone/configs/policies/cnnmlp.yaml
 batch_size: 2
 epochs: 1
 lr: 0.0001

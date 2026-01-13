@@ -1,0 +1,10 @@
+name: cnnmlp
+params:
+  exec_horizon: 2
+  act_config:
+    backbone: resnet18
+    lr_backbone: 1e-5
+    hidden_dim: 256
+    position_embedding: sine
+    dilation: false
+    masks: false

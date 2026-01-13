@@ -4,18 +4,19 @@ data:
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 8
   predict_horizon: 4
-  normalize_obs: true
+  normalize_obs: false
   obs_stats_path: null
   seed: 10000
-model:
-  hidden_dims: [256, 256]
-  action_squash: true
-  exec_horizon: 2
-  image_embed_dim: 128
-  image_encoder_pretrained: false
-  image_encoder_remove_layer_num: 2
-  image_encoder_no_stride: false
+policy:
+  config_path: standalone/configs/policies/cnnmlp.yaml
 ckpt: "standalone/standalone_runs/run_001/model_last.pt"
+init_states: ""
 steps: 8
 sample_index: 0
+n_eval: 1
+warmup_steps: 5
+save_videos: 0
+video_camera: ""
+video_fps: 30
+video_dir: ""
 device: "cuda:0"
