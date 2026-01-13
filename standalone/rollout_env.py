@@ -1,0 +1,467 @@
+from collections import deque
+from pathlib import Path
+
+import h5py
+import numpy as np
+import torch
+
+try:
+    import draccus
+except ImportError as exc:
+    raise ImportError("draccus is required; install with `pip install draccus`.") from exc
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+from libero.libero.envs import OffScreenRenderEnv
+from libero.libero.utils.video_utils import VideoWriter
+
+from standalone.configs import RolloutConfig, apply_policy_config, get_policy_param
+from standalone.dataset_utils.hdf5_sequence_dataset import (
+    HDF5SequenceDataset,
+    load_obs_stats,
+)
+from standalone.models.policy.act_policy import ACTPolicy
+
+DEFAULT_OBS_KEY_MAPPING = {
+    "agentview_rgb": "agentview_image",
+    "eye_in_hand_rgb": "robot0_eye_in_hand_image",
+    "gripper_states": "robot0_gripper_qpos",
+    "joint_states": "robot0_joint_pos",
+}
+
+
+def read_bddl_from_hdf5(hdf5_path):
+    with h5py.File(hdf5_path, "r") as f:
+        data = f["data"]
+        return data.attrs.get("bddl_file_name", None)
+
+
+def read_init_states_from_hdf5(hdf5_path):
+    """
+    Collect one init_state per demo entry in the given HDF5.
+    Prefers the per-demo attr 'init_state'; falls back to the first 'states' entry.
+    """
+
+    def demo_sort_key(name):
+        try:
+            return int(name.split("_")[1])
+        except Exception:
+            return name
+
+    init_states = []
+    with h5py.File(hdf5_path, "r") as f:
+        data = f["data"]
+        demo_keys = sorted([k for k in data.keys() if k.startswith("demo_")], key=demo_sort_key)
+        if not demo_keys:
+            raise ValueError(f"No demo_xx groups found under 'data' in {hdf5_path}")
+
+        for demo_key in demo_keys:
+            demo_grp = data[demo_key]
+            init_state = demo_grp.attrs.get("init_state", None)
+            if init_state is None and "states" in demo_grp and len(demo_grp["states"]) > 0:
+                init_state = demo_grp["states"][0]
+            if init_state is None:
+                print(f"[warning] {demo_key} missing init_state; skipping")
+                continue
+            init_states.append(np.array(init_state))
+
+    if not init_states:
+        raise ValueError(f"No init states could be read from {hdf5_path}")
+
+    init_states = np.stack(init_states, axis=0)
+    return init_states
+
+
+def load_init_states(cfg, demo_path):
+    init_states_path = getattr(cfg, "init_states", None)
+    if init_states_path:
+        init_states_path = Path(init_states_path).expanduser().resolve()
+        if not init_states_path.exists():
+            raise FileNotFoundError(f"init states file not found: {init_states_path}")
+        init_states = torch.load(str(init_states_path))
+        if torch.is_tensor(init_states):
+            init_states = init_states.cpu().numpy()
+        else:
+            init_states = np.asarray(init_states)
+        print(f"[info] loaded {init_states.shape[0]} init states from {init_states_path}")
+        return init_states
+    return read_init_states_from_hdf5(str(demo_path))
+
+
+def load_default_obs_key_mapping():
+    if yaml is None:
+        return {}
+    config_path = Path(__file__).resolve().parents[1] / "libero/configs/data/default.yaml"
+    if not config_path.exists():
+        return {}
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+    mapping = cfg.get("obs_key_mapping", {})
+    return mapping or {}
+
+
+def build_obs_key_mapping(cfg, obs_keys, image_keys):
+    mapping = {}
+    mapping.update(DEFAULT_OBS_KEY_MAPPING)
+    mapping.update(load_default_obs_key_mapping())
+    if cfg.data.obs_key_mapping:
+        mapping.update(cfg.data.obs_key_mapping)
+    return {key: mapping.get(key, key) for key in obs_keys + image_keys}
+
+
+def resolve_bddl_path(bddl_file_name, demo_path):
+    if not bddl_file_name:
+        return None
+    candidate = Path(bddl_file_name).expanduser()
+    if candidate.is_absolute() and candidate.exists():
+        return str(candidate)
+    if candidate.exists():
+        return str(candidate.resolve())
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_candidate = (repo_root / "libero/libero/bddl_files" / candidate).resolve()
+    if repo_candidate.exists():
+        return str(repo_candidate)
+    demo_candidate = (demo_path.parent / candidate).resolve()
+    if demo_candidate.exists():
+        return str(demo_candidate)
+    return None
+
+
+def infer_camera_size(image_shapes):
+    if not image_shapes:
+        return None
+    heights = set()
+    widths = set()
+    for shape in image_shapes.values():
+        if len(shape) != 3:
+            raise ValueError(f"expected 3D image shape, got {shape}")
+        if shape[-1] in (1, 3):
+            h, w = shape[0], shape[1]
+        elif shape[0] in (1, 3):
+            h, w = shape[1], shape[2]
+        else:
+            raise ValueError(f"cannot infer channel dim from shape: {shape}")
+        heights.add(int(h))
+        widths.add(int(w))
+    if len(heights) != 1 or len(widths) != 1:
+        raise ValueError(f"mismatched camera sizes: heights={heights}, widths={widths}")
+    return heights.pop(), widths.pop()
+
+
+def camera_names_from_mapping(image_keys, obs_key_mapping):
+    names = []
+    for key in image_keys:
+        env_key = obs_key_mapping.get(key, key)
+        if env_key.endswith("_image"):
+            names.append(env_key[: -len("_image")])
+        else:
+            names.append(env_key)
+    return names
+
+
+def extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping):
+    out = {}
+    for key in obs_keys + image_keys:
+        env_key = obs_key_mapping.get(key, key)
+        if env_key not in env_obs:
+            raise KeyError(
+                f"env obs missing key {env_key} (for {key}); available keys: {list(env_obs.keys())}"
+            )
+        out[key] = env_obs[env_key]
+    print(f"[debug] extracted obs keys: {list(out.keys())}")
+    print(f"[debug] obs shapes: " + ", ".join(f"{k}: {v.shape}" for k, v in out.items()))
+    return out
+
+
+# def normalize_obs(obs, obs_stats):
+#     if obs_stats is None:
+#         return obs
+#     out = {}
+#     for key, value in obs.items():
+#         stats = obs_stats.get(key)
+#         if stats is None:
+#             out[key] = value
+#         else:
+#             mean = stats["mean"]
+#             std = stats["std"]
+#             out[key] = ((value - mean) / std).astype(np.float32)
+#     return out
+
+
+class ObsHistory:
+    def __init__(self, keys, horizon):
+        self.horizon = int(horizon)
+        if self.horizon <= 0:
+            raise ValueError("obs_horizon must be >= 1")
+        self._buffers = {key: deque(maxlen=self.horizon) for key in keys}
+
+    def reset(self):
+        for buf in self._buffers.values():
+            buf.clear()
+
+    def add(self, obs):
+        for key in self._buffers:
+            if key not in obs:
+                raise KeyError(f"missing key in obs history: {key}")
+            self._buffers[key].append(np.asarray(obs[key]))
+
+    def stack(self):
+        out = {}
+        for key, buf in self._buffers.items():
+            if not buf:
+                raise ValueError(f"no observations collected for key {key}")
+            arr = np.stack(list(buf), axis=0)
+            if arr.shape[0] < self.horizon:
+                pad = np.repeat(arr[[0]], self.horizon - arr.shape[0], axis=0)
+                arr = np.concatenate([pad, arr], axis=0)
+            out[key] = arr.astype(np.float32, copy=False)
+        return out
+
+
+def select_video_camera(cfg, image_keys, obs_key_mapping):
+    if getattr(cfg, "video_camera", ""):
+        return obs_key_mapping.get(cfg.video_camera, cfg.video_camera)
+    if not image_keys:
+        return None
+    first_key = image_keys[0]
+    return obs_key_mapping.get(first_key, first_key)
+
+
+def resolve_video_dir(cfg):
+    if getattr(cfg, "video_dir", ""):
+        return Path(cfg.video_dir).expanduser().resolve()
+    ckpt_dir = Path(cfg.ckpt).expanduser().resolve().parent
+    return ckpt_dir / "rollout_videos"
+
+
+def run_env_rollouts(
+    cfg,
+    model,
+    obs_keys,
+    image_keys,
+    obs_stats,
+    demo_path,
+    action_dim,
+    image_shapes,
+):
+    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
+    if bddl_file_name is None:
+        raise ValueError("bddl_file_name not found in hdf5; cannot create env")
+    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
+    if bddl_path is None:
+        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
+
+    init_states = load_init_states(cfg, demo_path)
+
+    obs_key_mapping = build_obs_key_mapping(cfg, obs_keys, image_keys)
+    camera_names = camera_names_from_mapping(image_keys, obs_key_mapping) if image_keys else []
+    cam_hw = infer_camera_size(image_shapes) if image_keys else None
+
+    env_args = {"bddl_file_name": bddl_path}
+    if image_keys:
+        if cam_hw is None:
+            raise ValueError("image_keys provided but camera size could not be inferred")
+        camera_h, camera_w = cam_hw
+        env_args.update(
+            {
+                "use_camera_obs": True,
+                "camera_names": camera_names,
+                "camera_heights": camera_h,
+                "camera_widths": camera_w,
+            }
+        )
+    else:
+        env_args["use_camera_obs"] = False
+
+    env = OffScreenRenderEnv(**env_args)
+    env.seed(cfg.data.seed)
+
+    save_videos = int(getattr(cfg, "save_videos", 0))
+    video_writer = None
+    video_camera = None
+    if save_videos > 0:
+        video_camera = select_video_camera(cfg, image_keys, obs_key_mapping)
+        if not video_camera:
+            print("[warning] save_videos requested but no image_keys; skipping video")
+        else:
+            video_dir = resolve_video_dir(cfg)
+            video_writer = VideoWriter(
+                video_path=str(video_dir),
+                save_video=True,
+                fps=int(getattr(cfg, "video_fps", 30)),
+                single_video=False,
+            )
+
+    total_states = init_states.shape[0]
+    if total_states == 0:
+        raise ValueError("no init states found in hdf5")
+
+    n_eval = int(cfg.n_eval)
+    if n_eval <= 0:
+        raise ValueError("n_eval must be >= 1")
+    if n_eval > total_states:
+        print(f"[warning] n_eval={n_eval} > init_states={total_states}; clipping")
+        n_eval = total_states
+
+    start_idx = int(cfg.sample_index)
+    if start_idx < 0 or start_idx >= total_states:
+        raise ValueError(f"sample_index out of range: {start_idx} (0..{total_states - 1})")
+    rollout_order = [(start_idx + i) % total_states for i in range(n_eval)]
+
+    history = ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon)
+    successes = 0
+
+    for ep_idx, init_idx in enumerate(rollout_order):
+        model.reset()
+        history.reset()
+        env.reset()
+        env_obs = env.set_init_state(init_states[init_idx])
+        if video_writer and video_camera not in env_obs:
+            print(f"[warning] video_camera {video_camera} not in env obs; disabling video")
+            video_writer = None
+        if video_writer and ep_idx < save_videos:
+            video_writer.append_obs(env_obs, done=False, idx=ep_idx, camera_name=video_camera)
+        obs = extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping)
+        history.add(obs)
+
+        dummy = np.zeros((action_dim,), dtype=np.float32)
+        for _ in range(int(cfg.warmup_steps)):
+            env_obs, _, _, _ = env.step(dummy)
+            if video_writer and ep_idx < save_videos:
+                video_writer.append_obs(
+                    env_obs, done=False, idx=ep_idx, camera_name=video_camera
+                )
+            obs = extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping)
+            history.add(obs)
+
+        done = False
+        steps_taken = 0
+        max_steps = int(cfg.steps)
+        if max_steps <= 0:
+            raise ValueError("steps must be >= 1")
+
+        while steps_taken < max_steps:
+            steps_taken += 1
+            obs_input = history.stack()
+            action = model.get_action(obs_input)
+            if torch.is_tensor(action):
+                action_np = action.detach().cpu().numpy()
+            else:
+                action_np = np.asarray(action)
+            action_np = action_np.reshape(-1)
+
+            env_obs, _, done, _ = env.step(action_np)
+            if video_writer and ep_idx < save_videos:
+                video_writer.append_obs(
+                    env_obs, done=bool(done), idx=ep_idx, camera_name=video_camera
+                )
+            obs = extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping)
+            history.add(obs)
+
+            if done:
+                successes += 1
+                break
+
+        print(
+            f"[rollout] episode {ep_idx} | init_state {init_idx} | steps {steps_taken} | success {done}"
+        )
+
+    env.close()
+    if video_writer:
+        video_writer.save()
+    sr = successes / max(n_eval, 1)
+    print("[info] rollout summary:")
+    print(f"  rollouts: {n_eval}")
+    print(f"  success: {successes}/{n_eval} ({sr:.3f})")
+
+
+@draccus.wrap()
+def main(cfg: RolloutConfig):
+    apply_policy_config(cfg)
+    if not cfg.data.demo_file:
+        raise ValueError("data.demo_file is required")
+    if not cfg.ckpt:
+        raise ValueError("ckpt is required")
+    obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
+    image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
+    all_keys = obs_keys + image_keys
+    policy_name = getattr(cfg.policy, "name", "mlp").lower()
+
+    demo_path = Path(cfg.data.demo_file).expanduser().resolve()
+    if not demo_path.exists():
+        raise FileNotFoundError(f"HDF5 not found: {demo_path}")
+
+    ckpt_path = Path(cfg.ckpt).expanduser().resolve()
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    device = cfg.device if torch.cuda.is_available() else "cpu"
+
+    dataset = HDF5SequenceDataset(
+        hdf5_path=str(demo_path),
+        obs_keys=all_keys,
+        obs_horizon=cfg.data.obs_horizon,
+        predict_horizon=cfg.data.predict_horizon,
+    )
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    obs_stats = None
+    if policy_name not in ("act", "cnnmlp"):
+        if cfg.data.obs_stats_path:
+            obs_stats = load_obs_stats(cfg.data.obs_stats_path)
+        elif isinstance(ckpt, dict) and ckpt.get("obs_stats") is not None:
+            obs_stats = ckpt["obs_stats"]
+        if obs_stats is not None and image_keys:
+            for key in image_keys:
+                obs_stats.pop(key, None)
+        if obs_stats is not None:
+            dataset.set_obs_stats(obs_stats)
+
+    sample = dataset[0]
+    action_dim = sample["actions"].shape[-1]
+    print(f"[debug] action_dim: {action_dim}")
+
+    image_shapes = {}
+    for key in image_keys:
+        if key not in sample["obs"]:
+            raise KeyError(f"image key not found in obs: {key}")
+        image_shapes[key] = sample["obs"][key].shape[1:]
+
+    exec_horizon = get_policy_param(cfg, "exec_horizon")
+    if policy_name not in ("act", "cnnmlp"):
+        raise ValueError(f"unsupported policy: {policy_name}")
+    qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
+    model = ACTPolicy(
+        obs_keys=obs_keys,
+        image_keys=image_keys,
+        obs_horizon=cfg.data.obs_horizon,
+        predict_horizon=cfg.data.predict_horizon,
+        exec_horizon=exec_horizon,
+        qpos_dim=qpos_dim,
+        action_dim=action_dim,
+        model_type=policy_name,
+        act_config=get_policy_param(cfg, "act_config"),
+    )
+
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    model.load_state_dict(state)
+    model.to(device)
+    model.reset()
+
+    run_env_rollouts(
+        cfg,
+        model,
+        obs_keys,
+        image_keys,
+        obs_stats,
+        demo_path,
+        action_dim,
+        image_shapes,
+    )
+
+
+if __name__ == "__main__":
+    main()
