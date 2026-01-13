@@ -12,14 +12,14 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import TrainConfig
+from standalone.configs import TrainConfig, apply_policy_config, get_policy_param
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
     load_obs_stats,
     save_obs_stats,
 )
-from standalone.models.policy.mlp_policy import MLPPolicy
+from standalone.models.policy.act_policy import ACTPolicy
 
 
 def set_seed(seed):
@@ -42,6 +42,7 @@ def build_splits(dataset_len, train_ratio, val_ratio, seed):
 
 @draccus.wrap()
 def main(cfg: TrainConfig):
+    apply_policy_config(cfg)
     if not cfg.data.demo_file:
         raise ValueError("data.demo_file is required")
     set_seed(cfg.data.seed)
@@ -53,6 +54,10 @@ def main(cfg: TrainConfig):
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     all_keys = obs_keys + image_keys
+    policy_name = getattr(cfg.policy, "name", "mlp").lower()
+    if policy_name in ("act", "cnnmlp") and cfg.data.normalize_obs:
+        print("[warn] ACT/CNNMLP policy ignores obs normalization; disabling normalize_obs.")
+        cfg.data.normalize_obs = False
 
     save_dir = Path(cfg.save_dir).expanduser().resolve()
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -113,29 +118,26 @@ def main(cfg: TrainConfig):
         )
 
     sample = base_dataset[train_idx[0]]
-    obs_dim = sum(np.prod(sample["obs"][k].shape) for k in obs_keys)
-    image_shapes = {}
+    action_dim = sample["actions"].shape[-1]
+    print(f"[debug] action_dim: {action_dim}")
+    exec_horizon = get_policy_param(cfg, "exec_horizon")
+    if policy_name not in ("act", "cnnmlp"):
+        raise ValueError(f"unsupported policy: {policy_name}")
+    qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
+    print(f"[debug] qpos_dim: {qpos_dim}")
     for key in image_keys:
         if key not in sample["obs"]:
             raise KeyError(f"image key not found in obs: {key}")
-        image_shapes[key] = sample["obs"][key].shape[1:]
-        obs_dim += sample["obs"][key].shape[0] * cfg.model.image_embed_dim
-    act_shape = sample["actions"].shape
-    action_dim = act_shape[-1]
-    model = MLPPolicy(
-        input_dim=obs_dim,
-        action_dim=action_dim,
-        predict_horizon=cfg.data.predict_horizon,
-        exec_horizon=cfg.model.exec_horizon,
-        hidden_dims=cfg.model.hidden_dims,
-        action_squash=cfg.model.action_squash,
+    model = ACTPolicy(
         obs_keys=obs_keys,
         image_keys=image_keys,
-        image_shapes=image_shapes,
-        image_embed_dim=cfg.model.image_embed_dim,
-        image_encoder_pretrained=cfg.model.image_encoder_pretrained,
-        image_encoder_remove_layer_num=cfg.model.image_encoder_remove_layer_num,
-        image_encoder_no_stride=cfg.model.image_encoder_no_stride,
+        obs_horizon=cfg.data.obs_horizon,
+        predict_horizon=cfg.data.predict_horizon,
+        exec_horizon=exec_horizon,
+        qpos_dim=qpos_dim,
+        action_dim=action_dim,
+        model_type=policy_name,
+        act_config=get_policy_param(cfg, "act_config"),
     )
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
