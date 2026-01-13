@@ -41,7 +41,8 @@ class ACTConfig:
             "weight_decay": 1e-4,
             "epochs": 300,
             "lr_drop": 200,
-            "clip_max_norm": 0.1,
+            # "clip_max_norm": 0.1,
+            "kl_weight": 10.0,
             "backbone": "resnet18",
             "dilation": False,
             "position_embedding": "sine",
@@ -82,10 +83,20 @@ class TrainConfig:
     policy: Any = field(default_factory=PolicyConfig)
     batch_size: int = 32
     epochs: int = 10
+    val_every: int = 10
+    rollout_every: int = 20
+    rollout_init_states_dir: Optional[str] = None
+    rollout_per_anchor: int = 2
+    rollout_steps: int = 8
+    rollout_warmup_steps: int = 5
     lr: float = 1e-4
     device: str = "cuda:0"
     save_dir: str = "standalone/standalone_runs/run_001"
     grad_clip: Optional[float] = None
+    use_wandb: bool = False
+    wandb_project: str = "libero-standalone"
+    wandb_entity: Optional[str] = None
+    experiment_name: Optional[str] = None
 
 
 @dataclass
@@ -107,6 +118,8 @@ class RolloutConfig:
     steps: int = 8
     sample_index: int = 0
     n_eval: int = 1
+    use_mp: bool = False
+    num_procs: int = 1
     warmup_steps: int = 5
     save_videos: int = 0
     video_camera: str = ""

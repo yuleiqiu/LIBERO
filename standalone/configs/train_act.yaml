@@ -1,0 +1,45 @@
+data:
+  demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
+  obs_keys: "joint_states,gripper_states"
+  image_keys: "agentview_rgb,eye_in_hand_rgb"
+  obs_horizon: 1
+  predict_horizon: 32
+  normalize_obs: false
+  obs_stats_path: null
+  train_ratio: 0.9
+  val_ratio: 0.1
+  seed: 10000
+policy:
+  config_path: standalone/configs/policies/act.yaml
+  params:
+    exec_horizon: 32
+    act_config:
+      lr_backbone: 1.0e-05
+      kl_weight: 10.0
+      backbone: resnet18
+      dilation: false
+      position_embedding: sine
+      enc_layers: 4
+      dec_layers: 6
+      dim_feedforward: 2048
+      hidden_dim: 256
+      dropout: 0.1
+      nheads: 8
+      pre_norm: false
+      masks: false
+batch_size: 128
+epochs: 100
+val_every: 10
+rollout_every: 20
+rollout_init_states_dir: ./libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.init
+rollout_per_anchor: 2
+rollout_steps: 1000
+rollout_warmup_steps: 5
+lr: 0.0001
+device: "cuda:0"
+save_dir: "standalone/standalone_runs/run_001"
+grad_clip: null
+use_wandb: true
+wandb_project: "libero-standalone"
+wandb_entity: null
+experiment_name: train_on_single_act

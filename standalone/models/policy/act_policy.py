@@ -51,7 +51,7 @@ class ACTPolicy(ChunkPolicy):
             self._model_type = "cnnmlp"
         else:
             raise ValueError(f"Unknown ACT model_type: {model_type}")
-        self.kl_weight = float(config.get("kl_weight", 1.0))
+        self.kl_weight = float(config.get("kl_weight", 10.0))
 
     @staticmethod
     def _to_tensor(value):
