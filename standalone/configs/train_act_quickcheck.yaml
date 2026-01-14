@@ -1,11 +1,13 @@
 data:
-  demo_file: ./libero/datasets/processed/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
-  obs_keys: "joint_states,gripper_states"
+  demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
+  obs_keys: "joint_states,gripper_states,ee_pos"
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 1
   predict_horizon: 1
   normalize_obs: false
   obs_stats_path: null
+  obs_key_mapping:
+    ee_pos: robot0_eef_pos
   train_ratio: 0.9
   val_ratio: 0.1
   seed: 10000
@@ -34,10 +36,10 @@ val_every: 10
 rollout_every: 10
 rollout_init_states_dir: ./libero/libero/init_files/
 rollout_per_anchor: 2
-rollout_steps: 600
-rollout_warmup_steps: 5
-rollout_use_mp: false
-rollout_num_procs: 1
+rollout_steps: 1000
+rollout_warmup_steps: 10
+rollout_use_mp: true
+rollout_num_procs: 9
 lr: 0.0001
 device: "cuda:0"
 save_dir: "standalone/standalone_runs/run_quickcheck"
