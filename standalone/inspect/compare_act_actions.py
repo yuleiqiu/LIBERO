@@ -101,10 +101,31 @@ def to_rgb_uint8(image: np.ndarray) -> np.ndarray:
     return img
 
 
+def _multiline_text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont):
+    if hasattr(draw, "multiline_textbbox"):
+        left, top, right, bottom = draw.multiline_textbbox((0, 0), text, font=font)
+        return right - left, bottom - top
+    if hasattr(draw, "multiline_textsize"):
+        return draw.multiline_textsize(text, font=font)
+    lines = text.splitlines() or [""]
+    widths = []
+    heights = []
+    for line in lines:
+        if hasattr(draw, "textbbox"):
+            left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+            widths.append(right - left)
+            heights.append(bottom - top)
+        else:
+            w, h = draw.textsize(line, font=font)
+            widths.append(w)
+            heights.append(h)
+    return max(widths) if widths else 0, sum(heights) if heights else 0
+
+
 def overlay_text(frame: np.ndarray, text: str, font: ImageFont.ImageFont) -> np.ndarray:
     image = Image.fromarray(frame)
     draw = ImageDraw.Draw(image)
-    text_w, text_h = draw.multiline_textsize(text, font=font)
+    text_w, text_h = _multiline_text_size(draw, text, font)
     x = max((image.width - text_w) // 2, 0)
     y = max((image.height - text_h) // 2, 0)
     pad = 4
