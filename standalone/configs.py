@@ -89,6 +89,8 @@ class TrainConfig:
     rollout_per_anchor: int = 2
     rollout_steps: int = 8
     rollout_warmup_steps: int = 5
+    rollout_use_mp: bool = False
+    rollout_num_procs: int = 1
     lr: float = 1e-4
     device: str = "cuda:0"
     save_dir: str = "standalone/standalone_runs/run_001"

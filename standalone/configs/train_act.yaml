@@ -31,10 +31,12 @@ batch_size: 128
 epochs: 100
 val_every: 10
 rollout_every: 20
-rollout_init_states_dir: ./libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.init
+rollout_init_states_dir: ./libero/libero/init_files/
 rollout_per_anchor: 2
 rollout_steps: 1000
 rollout_warmup_steps: 5
+rollout_use_mp: false
+rollout_num_procs: 1
 lr: 0.0001
 device: "cuda:0"
 save_dir: "standalone/standalone_runs/run_001"

@@ -171,8 +171,8 @@ def extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping):
                 f"env obs missing key {env_key} (for {key}); available keys: {list(env_obs.keys())}"
             )
         out[key] = env_obs[env_key]
-    print(f"[debug] extracted obs keys: {list(out.keys())}")
-    print(f"[debug] obs shapes: " + ", ".join(f"{k}: {v.shape}" for k, v in out.items()))
+    # print(f"[debug] extracted obs keys: {list(out.keys())}")
+    # print(f"[debug] obs shapes: " + ", ".join(f"{k}: {v.shape}" for k, v in out.items()))
     return out
 
 
@@ -271,6 +271,7 @@ def run_env_rollouts(
     image_shapes,
     init_states_override=None,
     rollout_order_override=None,
+    anchor_ids=None,
 ):
     bddl_file_name = read_bddl_from_hdf5(str(demo_path))
     if bddl_file_name is None:
@@ -307,6 +308,7 @@ def run_env_rollouts(
     save_videos = int(getattr(cfg, "save_videos", 0))
     video_writer = None
     video_camera = None
+    video_dir = None
     if save_videos > 0:
         video_camera = select_video_camera(cfg, image_keys, obs_key_mapping)
         if not video_camera:
@@ -359,6 +361,7 @@ def run_env_rollouts(
     if max_steps <= 0:
         raise ValueError("steps must be >= 1")
 
+    episode_results = []
     if env_num == 1:
         env = OffScreenRenderEnv(**env_args)
         env.seed(cfg.data.seed)
@@ -415,6 +418,15 @@ def run_env_rollouts(
             print(
                 f"[rollout] episode {ep_idx} | init_state {init_idx} | steps {steps_taken} | success {done}"
             )
+            result = {
+                "rollout_idx": ep_idx,
+                "init_idx": init_idx,
+                "success": bool(done),
+                "steps": steps_taken,
+            }
+            if anchor_ids is not None:
+                result["anchor_id"] = int(anchor_ids[init_idx])
+            episode_results.append(result)
 
         env.close()
         if video_writer:
@@ -423,7 +435,14 @@ def run_env_rollouts(
         print("[info] rollout summary:")
         print(f"  rollouts: {n_eval}")
         print(f"  success: {successes}/{n_eval} ({sr:.3f})")
-        return
+        return {
+            "n_eval": n_eval,
+            "successes": successes,
+            "success_rate": sr,
+            "rollout_order": rollout_order,
+            "episode_results": episode_results,
+            "video_dir": str(video_dir) if video_dir is not None else None,
+        }
 
     env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
     env.seed(cfg.data.seed)
@@ -570,6 +589,15 @@ def run_env_rollouts(
                 f"[rollout] episode {batch_start + i} | init_state {indices[i]} | "
                 f"steps {steps_by_env[i]} | success {dones[i]}"
             )
+            result = {
+                "rollout_idx": batch_start + i,
+                "init_idx": indices[i],
+                "success": bool(dones[i]),
+                "steps": steps_by_env[i],
+            }
+            if anchor_ids is not None:
+                result["anchor_id"] = int(anchor_ids[indices[i]])
+            episode_results.append(result)
 
     env.close()
     if video_writer:
@@ -579,6 +607,14 @@ def run_env_rollouts(
     print(f"  rollouts: {n_eval}")
     print(f"  envs: {env_num} (use_mp={use_mp})")
     print(f"  success: {successes}/{n_eval} ({sr:.3f})")
+    return {
+        "n_eval": n_eval,
+        "successes": successes,
+        "success_rate": sr,
+        "rollout_order": rollout_order,
+        "episode_results": episode_results,
+        "video_dir": str(video_dir) if video_dir is not None else None,
+    }
 
 
 @draccus.wrap()

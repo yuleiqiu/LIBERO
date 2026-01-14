@@ -107,7 +107,7 @@ def load_init_states_with_anchors(cfg, demo_path):
     by_anchor = defaultdict(list)
     for idx, anchor_id in enumerate(anchor_indices):
         by_anchor[int(anchor_id)].append(idx)
-    return init_states, by_anchor, init_states_path
+    return init_states, by_anchor, init_states_path, anchor_indices
 
 
 def sample_per_anchor(by_anchor, per_anchor, rng):
@@ -187,6 +187,8 @@ def main(cfg: TrainConfig):
         raise ValueError("rollout_steps must be >= 1")
     if cfg.rollout_warmup_steps < 0:
         raise ValueError("rollout_warmup_steps must be >= 0")
+    if cfg.rollout_num_procs <= 0:
+        raise ValueError("rollout_num_procs must be >= 1")
 
     base_dataset = HDF5SequenceDataset(
         hdf5_path=str(demo_path),
@@ -250,12 +252,12 @@ def main(cfg: TrainConfig):
 
     sample = base_dataset[train_idx[0]]
     action_dim = sample["actions"].shape[-1]
-    print(f"[debug] action_dim: {action_dim}")
+    # print(f"[debug] action_dim: {action_dim}")
     exec_horizon = get_policy_param(cfg, "exec_horizon")
     if policy_name not in ("act", "cnnmlp"):
         raise ValueError(f"unsupported policy: {policy_name}")
     qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
-    print(f"[debug] qpos_dim: {qpos_dim}")
+    # print(f"[debug] qpos_dim: {qpos_dim}")
     image_shapes = {}
     for key in image_keys:
         if key not in sample["obs"]:
@@ -279,7 +281,7 @@ def main(cfg: TrainConfig):
     if rollout_every > 0:
         if cfg.rollout_per_anchor <= 0:
             raise ValueError("rollout_per_anchor must be >= 1")
-        init_states, anchor_map, init_states_path = load_init_states_with_anchors(
+        init_states, anchor_map, init_states_path, anchor_indices = load_init_states_with_anchors(
             cfg, demo_path
         )
         if not anchor_map:
@@ -295,6 +297,7 @@ def main(cfg: TrainConfig):
             "init_states": init_states,
             "anchor_map": anchor_map,
             "image_shapes": image_shapes,
+            "anchor_indices": anchor_indices,
         }
         from standalone.rollout_env import run_env_rollouts
 
@@ -402,20 +405,22 @@ def main(cfg: TrainConfig):
             rollout_indices = sample_per_anchor(
                 rollout_state["anchor_map"], cfg.rollout_per_anchor, rng
             )
+            save_videos = len(rollout_indices) if wandb is not None else 0
+            video_dir = save_dir / "rollout_videos" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
                 steps=int(cfg.rollout_steps),
                 warmup_steps=int(cfg.rollout_warmup_steps),
                 n_eval=len(rollout_indices),
                 sample_index=0,
-                save_videos=0,
+                save_videos=save_videos,
                 video_camera="",
                 video_fps=30,
-                video_dir="",
-                use_mp=False,
-                num_procs=1,
+                video_dir=str(video_dir),
+                use_mp=bool(cfg.rollout_use_mp),
+                num_procs=int(cfg.rollout_num_procs),
             )
-            rollout_runner(
+            rollout_details = rollout_runner(
                 rollout_cfg,
                 model,
                 obs_keys,
@@ -426,7 +431,52 @@ def main(cfg: TrainConfig):
                 rollout_state["image_shapes"],
                 init_states_override=rollout_state["init_states"],
                 rollout_order_override=rollout_indices,
+                anchor_ids=rollout_state["anchor_indices"],
             )
+            if wandb is not None and rollout_details is not None:
+                anchor_counts = defaultdict(int)
+                anchor_success = defaultdict(int)
+                for result in rollout_details.get("episode_results", []):
+                    anchor_id = result.get("anchor_id")
+                    if anchor_id is None:
+                        continue
+                    anchor_counts[anchor_id] += 1
+                    if result.get("success"):
+                        anchor_success[anchor_id] += 1
+                anchor_table = wandb.Table(columns=["anchor_id", "success"])
+                for anchor_id in sorted(anchor_counts.keys()):
+                    success_str = f"{anchor_success[anchor_id]}/{anchor_counts[anchor_id]}"
+                    anchor_table.add_data(anchor_id, success_str)
+
+                video_table = wandb.Table(
+                    columns=["rollout_idx", "anchor_id", "init_idx", "success", "steps", "video"]
+                )
+                video_root = rollout_details.get("video_dir")
+                for result in rollout_details.get("episode_results", []):
+                    video_item = None
+                    if video_root:
+                        video_path = Path(video_root) / f"{result['rollout_idx']}.mp4"
+                        if video_path.exists():
+                            video_item = wandb.Video(
+                                str(video_path), fps=int(rollout_cfg.video_fps), format="mp4"
+                            )
+                    video_table.add_data(
+                        result["rollout_idx"],
+                        result.get("anchor_id"),
+                        result["init_idx"],
+                        result["success"],
+                        result["steps"],
+                        video_item,
+                    )
+
+                wandb.log(
+                    {
+                        "rollout/success_rate": rollout_details.get("success_rate"),
+                        "rollout/anchor_success": anchor_table,
+                        "rollout/videos": video_table,
+                    },
+                    step=epoch,
+                )
 
         if wandb is not None:
             log_data = {"epoch": epoch, "train/loss": avg_train}
