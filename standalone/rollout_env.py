@@ -395,6 +395,7 @@ def run_env_rollouts(
         env.seed(cfg.data.seed)
         history = ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon)
         successes = 0
+        pbar = tqdm(total=n_eval, desc="rollout", leave=True)
 
         for ep_idx, init_idx in enumerate(rollout_order):
             model.reset()
@@ -456,6 +457,11 @@ def run_env_rollouts(
             print(
                 f"[rollout] episode {ep_idx} | init_state {init_idx} | steps {steps_taken} | success {done}"
             )
+            pbar.update(1)
+            pbar.set_postfix(
+                sr=f"{successes / max(ep_idx + 1, 1):.3f}",
+                step=steps_taken,
+            )
             result = {
                 "rollout_idx": ep_idx,
                 "init_idx": init_idx,
@@ -467,6 +473,7 @@ def run_env_rollouts(
             episode_results.append(result)
 
         env.close()
+        pbar.close()
         if video_writer:
             video_writer.save()
         sr = successes / max(n_eval, 1)
