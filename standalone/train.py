@@ -405,18 +405,16 @@ def main(cfg: TrainConfig):
             rollout_indices = sample_per_anchor(
                 rollout_state["anchor_map"], cfg.rollout_per_anchor, rng
             )
-            save_videos = len(rollout_indices) if wandb is not None else 0
-            video_dir = save_dir / "rollout_videos" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
                 steps=int(cfg.rollout_steps),
                 warmup_steps=int(cfg.rollout_warmup_steps),
                 n_eval=len(rollout_indices),
                 sample_index=0,
-                save_videos=save_videos,
+                save_videos=0,
                 video_camera="",
                 video_fps=30,
-                video_dir=str(video_dir),
+                video_dir="",
                 use_mp=bool(cfg.rollout_use_mp),
                 num_procs=int(cfg.rollout_num_procs),
             )
@@ -448,32 +446,10 @@ def main(cfg: TrainConfig):
                     success_str = f"{anchor_success[anchor_id]}/{anchor_counts[anchor_id]}"
                     anchor_table.add_data(anchor_id, success_str)
 
-                video_table = wandb.Table(
-                    columns=["rollout_idx", "anchor_id", "init_idx", "success", "steps", "video"]
-                )
-                video_root = rollout_details.get("video_dir")
-                for result in rollout_details.get("episode_results", []):
-                    video_item = None
-                    if video_root:
-                        video_path = Path(video_root) / f"{result['rollout_idx']}.mp4"
-                        if video_path.exists():
-                            video_item = wandb.Video(
-                                str(video_path), fps=int(rollout_cfg.video_fps), format="mp4"
-                            )
-                    video_table.add_data(
-                        result["rollout_idx"],
-                        result.get("anchor_id"),
-                        result["init_idx"],
-                        result["success"],
-                        result["steps"],
-                        video_item,
-                    )
-
                 wandb.log(
                     {
                         "rollout/success_rate": rollout_details.get("success_rate"),
                         "rollout/anchor_success": anchor_table,
-                        "rollout/videos": video_table,
                     },
                     step=epoch,
                 )
