@@ -47,6 +47,7 @@ class ACTConfig:
             "dilation": False,
             "position_embedding": "sine",
             "camera_names": [],
+            "image_norm": "none",
             "enc_layers": 4,
             "dec_layers": 6,
             "dim_feedforward": 2048,

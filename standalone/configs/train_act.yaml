@@ -19,6 +19,7 @@ policy:
       backbone: resnet18
       dilation: false
       position_embedding: sine
+      image_norm: scale_0_1
       enc_layers: 4
       dec_layers: 6
       dim_feedforward: 2048

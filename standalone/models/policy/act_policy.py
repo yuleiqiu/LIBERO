@@ -40,6 +40,7 @@ class ACTPolicy(ChunkPolicy):
             }
         )
         args = get_args_parser(config)
+        self.image_norm = str(config.get("image_norm", "none")).lower()
 
         model_type = (model_type or "cnnmlp").lower()
         self._model_type = None
@@ -99,13 +100,34 @@ class ACTPolicy(ChunkPolicy):
             images.append(x)
         if not images:
             raise ValueError("no image_keys provided for ACTPolicy input")
-        return torch.stack(images, dim=1)
+        images = torch.stack(images, dim=1).to(dtype=torch.float32)
+        return self._normalize_images(images)
+
+    def _normalize_images(self, images: torch.Tensor) -> torch.Tensor:
+        if self.image_norm in ("none", "", "null"):
+            return images
+        if self.image_norm in ("scale_0_1", "0_1", "unit"):
+            return images / 255.0
+        if self.image_norm in ("imagenet", "imagenet_norm"):
+            if images.shape[2] != 3:
+                raise ValueError(
+                    f"imagenet normalization expects 3 channels, got {images.shape[2]}"
+                )
+            images = images / 255.0
+            mean = torch.tensor([0.485, 0.456, 0.406], device=images.device).view(
+                1, 1, 3, 1, 1
+            )
+            std = torch.tensor([0.229, 0.224, 0.225], device=images.device).view(
+                1, 1, 3, 1, 1
+            )
+            return (images - mean) / std
+        raise ValueError(f"unknown image_norm setting: {self.image_norm}")
 
     def forward(self, obs):
         if not isinstance(obs, dict):
             raise TypeError("ACTPolicy expects a dict of observations")
         qpos = self._build_qpos(obs).to(dtype=torch.float32)
-        image = self._build_images(obs).to(dtype=torch.float32)
+        image = self._build_images(obs)
         if self._model_type == "act":
             actions, _, _ = self.model(qpos, image, env_state=None)
         else:
@@ -127,7 +149,7 @@ class ACTPolicy(ChunkPolicy):
 
         obs = batch["obs"]
         qpos = self._build_qpos(obs).to(dtype=torch.float32)
-        image = self._build_images(obs).to(dtype=torch.float32)
+        image = self._build_images(obs)
         actions = batch["actions"]
         if actions.ndim == 2:
             actions = actions.unsqueeze(1)
