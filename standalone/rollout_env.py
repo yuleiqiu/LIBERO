@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import torch
 import json
+from tqdm import tqdm
 
 try:
     import draccus
@@ -491,6 +492,7 @@ def run_env_rollouts(
 
     successes = 0
     episodes_done = 0
+    pbar = tqdm(total=n_eval, desc="rollout", leave=True)
     for loop_idx in range(eval_loop_num):
         if episodes_done >= n_eval:
             break
@@ -565,6 +567,7 @@ def run_env_rollouts(
         device = next(model.parameters()).device
         while steps_taken < max_steps:
             steps_taken += 1
+            prev_done = sum(1 for d in dones[:remaining] if d)
             pending = [
                 i
                 for i in range(remaining)
@@ -604,6 +607,17 @@ def run_env_rollouts(
                     steps_by_env[i] += 1
                 if bool(done_array[i]):
                     dones[i] = True
+            curr_done = sum(1 for d in dones[:remaining] if d)
+            newly_done = curr_done - prev_done
+            if newly_done > 0:
+                pbar.update(newly_done)
+            current_successes = successes + sum(1 for d in dones[:remaining] if d)
+            total_done = episodes_done + curr_done
+            pbar.set_postfix(
+                sr=f"{current_successes / max(total_done, 1):.3f}",
+                active=remaining - curr_done,
+                step=steps_taken,
+            )
 
             env_obs_list = split_env_obs(env_obs, env_num)
             if video_writer:
@@ -647,6 +661,7 @@ def run_env_rollouts(
             episode_results.append(result)
 
     env.close()
+    pbar.close()
     if video_writer:
         video_writer.save()
     sr = successes / max(n_eval, 1)

@@ -16,7 +16,7 @@ sample_index: 0
 n_eval: 90
 warmup_steps: 5
 use_mp: true
-num_procs: 4
+num_procs: 10
 save_videos: 90
 video_camera: "agentview_rgb,eye_in_hand_rgb"
 video_fps: 30
