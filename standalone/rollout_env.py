@@ -1,9 +1,10 @@
-from collections import deque
+from collections import defaultdict, deque
 from pathlib import Path
 
 import h5py
 import numpy as np
 import torch
+import json
 
 try:
     import draccus
@@ -89,6 +90,22 @@ def load_init_states(cfg, demo_path):
         print(f"[info] loaded {init_states.shape[0]} init states from {init_states_path}")
         return init_states
     return read_init_states_from_hdf5(str(demo_path))
+
+
+def load_anchor_indices(cfg):
+    init_states_path = getattr(cfg, "init_states", None)
+    if not init_states_path:
+        return None
+    init_states_path = Path(init_states_path).expanduser().resolve()
+    anchors_meta = init_states_path.with_suffix(init_states_path.suffix + ".anchors.json")
+    if not anchors_meta.exists():
+        print(f"[warning] anchors meta not found: {anchors_meta}")
+        return None
+    with open(anchors_meta, "r") as f:
+        anchor_indices = json.load(f).get("anchor_idx", None)
+    if anchor_indices is None:
+        print(f"[warning] anchor_idx not found in {anchors_meta}")
+    return anchor_indices
 
 
 def load_default_obs_key_mapping():
@@ -246,7 +263,13 @@ class ObsHistory:
 
 def select_video_camera(cfg, image_keys, obs_key_mapping):
     if getattr(cfg, "video_camera", ""):
-        return obs_key_mapping.get(cfg.video_camera, cfg.video_camera)
+        raw = str(cfg.video_camera)
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return obs_key_mapping.get(parts[0], parts[0])
+        return [obs_key_mapping.get(p, p) for p in parts]
     if not image_keys:
         return None
     first_key = image_keys[0]
@@ -325,6 +348,10 @@ def run_env_rollouts(
     total_states = init_states.shape[0]
     if total_states == 0:
         raise ValueError("no init states found in hdf5")
+    if anchor_ids is not None and len(anchor_ids) != total_states:
+        raise ValueError(
+            f"anchor_ids length mismatch: {len(anchor_ids)} vs {total_states}"
+        )
 
     if rollout_order_override is not None:
         rollout_order = list(rollout_order_override)
@@ -373,9 +400,19 @@ def run_env_rollouts(
             history.reset()
             env.reset()
             env_obs = env.set_init_state(init_states[init_idx])
-            if video_writer and video_camera not in env_obs:
-                print(f"[warning] video_camera {video_camera} not in env obs; disabling video")
-                video_writer = None
+            if video_writer:
+                missing = []
+                if isinstance(video_camera, (list, tuple)):
+                    for name in video_camera:
+                        if name not in env_obs:
+                            missing.append(name)
+                elif video_camera not in env_obs:
+                    missing.append(video_camera)
+                if missing:
+                    print(
+                        f"[warning] video_camera {missing} not in env obs; disabling video"
+                    )
+                    video_writer = None
             if video_writer and ep_idx < save_videos:
                 video_writer.append_obs(env_obs, done=False, idx=ep_idx, camera_name=video_camera)
             obs = extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping)
@@ -471,9 +508,19 @@ def run_env_rollouts(
         env.reset()
         env_obs = env.set_init_state(init_states_batch)
         env_obs_list = split_env_obs(env_obs, env_num)
-        if video_writer and video_camera not in env_obs_list[0]:
-            print(f"[warning] video_camera {video_camera} not in env obs; disabling video")
-            video_writer = None
+        if video_writer:
+            missing = []
+            if isinstance(video_camera, (list, tuple)):
+                for name in video_camera:
+                    if name not in env_obs_list[0]:
+                        missing.append(name)
+            elif video_camera not in env_obs_list[0]:
+                missing.append(video_camera)
+            if missing:
+                print(
+                    f"[warning] video_camera {missing} not in env obs; disabling video"
+                )
+                video_writer = None
         if video_writer:
             for i in range(env_num):
                 record_active[i] = False
