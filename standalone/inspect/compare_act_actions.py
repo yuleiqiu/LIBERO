@@ -310,8 +310,8 @@ def main():
 
                 if len(image_keys) < 2:
                     raise ValueError("video rendering expects at least 2 image keys.")
-                img_left = to_rgb_uint8(obs[image_keys[0]])
-                img_right = to_rgb_uint8(obs[image_keys[1]])
+                img_left = to_rgb_uint8(obs[image_keys[0]])[::-1]
+                img_right = to_rgb_uint8(obs[image_keys[1]])[::-1]
                 row = np.hstack([img_left, img_right])
                 rows.append(row)
 
