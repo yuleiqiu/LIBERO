@@ -1,20 +1,26 @@
 data:
   demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
-  obs_keys: "joint_states,gripper_states"
+  obs_keys: "joint_states,gripper_states,ee_pos"
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 1
-  predict_horizon: 32
+  predict_horizon: 1
   normalize_obs: false
   obs_stats_path: null
+  obs_key_mapping:
+    ee_pos: robot0_eef_pos
   seed: 10000
 policy:
-  config_path: standalone/configs/policies/act.yaml
-ckpt: "standalone/standalone_runs/run_001/model_last.pt"
+  config_path: standalone/configs/policies/cnnmlp.yaml
+  params:
+    exec_horizon: 1
+    act_config:
+      image_norm: imagenet
+ckpt: "standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt"
 init_states: "./libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.pruned_init"
 steps: 1000
 sample_index: 0
 n_eval: 90
-warmup_steps: 5
+warmup_steps: 10
 use_mp: true
 num_procs: 10
 save_videos: 90
