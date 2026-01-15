@@ -405,16 +405,17 @@ def main(cfg: TrainConfig):
             rollout_indices = sample_per_anchor(
                 rollout_state["anchor_map"], cfg.rollout_per_anchor, rng
             )
+            video_dir = save_dir / "rollout_videos" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
                 steps=int(cfg.rollout_steps),
                 warmup_steps=int(cfg.rollout_warmup_steps),
                 n_eval=len(rollout_indices),
                 sample_index=0,
-                save_videos=0,
+                save_videos=len(rollout_indices),
                 video_camera="",
                 video_fps=30,
-                video_dir="",
+                video_dir=str(video_dir),
                 use_mp=bool(cfg.rollout_use_mp),
                 num_procs=int(cfg.rollout_num_procs),
             )
