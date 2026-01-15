@@ -30,7 +30,7 @@ policy:
       nheads: 8
       pre_norm: false
       masks: false
-batch_size: 128
+batch_size: 512
 epochs: 50
 val_every: 10
 rollout_every: 10
