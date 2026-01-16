@@ -195,6 +195,7 @@ def main(cfg: TrainConfig):
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
+        action_shift=getattr(cfg.data, "action_shift", 0),
     )
 
     train_idx, val_idx, eval_idx = build_splits(

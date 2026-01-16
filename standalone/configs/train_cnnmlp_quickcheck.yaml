@@ -4,6 +4,7 @@ data:
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 1
   predict_horizon: 1
+  action_shift: 1  # Predict next-step actions from current obs.
   normalize_obs: false
   obs_stats_path: null
   obs_key_mapping:

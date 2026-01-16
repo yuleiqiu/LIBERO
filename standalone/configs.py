@@ -15,6 +15,7 @@ class DataConfig:
     image_keys: str = "agentview_rgb,eye_in_hand_rgb"
     obs_horizon: int = 1
     predict_horizon: int = 1
+    action_shift: int = 0  # Offset actions relative to obs; 1 means predict next-step actions.
     normalize_obs: bool = False
     obs_stats_path: Optional[str] = None
     obs_key_mapping: Optional[Dict[str, str]] = None
