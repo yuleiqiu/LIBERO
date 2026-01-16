@@ -27,5 +27,5 @@ num_procs: 10
 save_videos: 90
 video_camera: "agentview_rgb,eye_in_hand_rgb"
 video_fps: 30
-video_dir: ""
+video_dir: "standalone/standalone_runs/run_cnnmlp_quickcheck/rollout_on_test_init"
 device: "cuda:0"

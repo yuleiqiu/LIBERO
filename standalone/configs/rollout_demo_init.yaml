@@ -1,6 +1,6 @@
 # Test on train: rollout using init states from the demo HDF5.
 data:
-  demo_file: ./libero/datasets/processed/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
+  demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
   obs_keys: "joint_states,gripper_states,ee_pos"
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 1
@@ -18,14 +18,14 @@ policy:
       image_norm: imagenet
 ckpt: "standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt"
 init_states: null
-steps: 600
+steps: 1000
 sample_index: 0
 n_eval: 90
-warmup_steps: 5
+warmup_steps: 10
 use_mp: true
 num_procs: 10
 save_videos: 90
 video_camera: "agentview_rgb,eye_in_hand_rgb"
 video_fps: 30
-video_dir: ""
+video_dir: "standalone/standalone_runs/run_cnnmlp_quickcheck/rollout_on_train_init"
 device: "cuda:0"
