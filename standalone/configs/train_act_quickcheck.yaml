@@ -42,7 +42,7 @@ rollout_use_mp: true
 rollout_num_procs: 9
 lr: 0.0001
 device: "cuda:0"
-save_dir: "standalone/standalone_runs/run_quickcheck"
+save_dir: "standalone/standalone_runs/run_act——quickcheck"
 grad_clip: null
 use_wandb: true
 wandb_project: "libero-standalone"
