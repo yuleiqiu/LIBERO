@@ -30,7 +30,7 @@ rollout_every: 10
 rollout_init_states_dir: ./libero/libero/init_files/
 rollout_per_anchor: 2
 rollout_steps: 1000
-rollout_warmup_steps: 5
+rollout_warmup_steps: 10
 rollout_use_mp: true
 rollout_num_procs: 9
 lr: 0.0001
