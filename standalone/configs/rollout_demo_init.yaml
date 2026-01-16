@@ -1,6 +1,6 @@
-# Test on test: rollout using init states from init_files (pruned_init).
+# Test on train: rollout using init states from the demo HDF5.
 data:
-  demo_file: ./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
+  demo_file: ./libero/datasets/processed/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5
   obs_keys: "joint_states,gripper_states,ee_pos"
   image_keys: "agentview_rgb,eye_in_hand_rgb"
   obs_horizon: 1
@@ -17,11 +17,11 @@ policy:
     act_config:
       image_norm: imagenet
 ckpt: "standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt"
-init_states: "./libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.pruned_init"
-steps: 1000
+init_states: null
+steps: 600
 sample_index: 0
 n_eval: 90
-warmup_steps: 10
+warmup_steps: 5
 use_mp: true
 num_procs: 10
 save_videos: 90
