@@ -151,24 +151,31 @@ def main():
             pred = pred[:, : actions.shape[1]]
 
             diff = pred - actions
-            if action_mask is not None:
-                mask = action_mask[:, : actions.shape[1]].unsqueeze(-1) > 0
-                diff_np = diff[mask].detach().cpu().numpy()
-                gt_np = actions[mask].detach().cpu().numpy()
-                pred_np = pred[mask].detach().cpu().numpy()
-            else:
-                diff_np = diff.detach().cpu().numpy().reshape(-1, action_dim)
-                gt_np = actions.detach().cpu().numpy().reshape(-1, action_dim)
-                pred_np = pred.detach().cpu().numpy().reshape(-1, action_dim)
+            diff_np = diff.detach().cpu().numpy()
+            gt_np = actions.detach().cpu().numpy()
 
-            mse = float(np.mean(diff_np ** 2))
-            l1 = float(np.mean(np.abs(diff_np)))
+            if action_mask is not None:
+                mask_np = (
+                    action_mask[:, : actions.shape[1]].detach().cpu().numpy() > 0
+                )
+                mask_np = mask_np[..., None]  # (B, T, 1) -> broadcast over action dim
+                valid_steps = float(mask_np.sum())
+                denom = max(valid_steps * action_dim, 1.0)
+                mse = float((diff_np ** 2 * mask_np).sum() / denom)
+                l1 = float((np.abs(diff_np) * mask_np).sum() / denom)
+            else:
+                mse = float(np.mean(diff_np ** 2))
+                l1 = float(np.mean(np.abs(diff_np)))
             sum_mse += mse
             sum_l1 += l1
 
             base_diff = mean_action - gt_np
-            mse_base = float(np.mean(base_diff ** 2))
-            l1_base = float(np.mean(np.abs(base_diff)))
+            if action_mask is not None:
+                mse_base = float((base_diff ** 2 * mask_np).sum() / denom)
+                l1_base = float((np.abs(base_diff) * mask_np).sum() / denom)
+            else:
+                mse_base = float(np.mean(base_diff ** 2))
+                l1_base = float(np.mean(np.abs(base_diff)))
             sum_mse_base += mse_base
             sum_l1_base += l1_base
             count += 1
@@ -179,10 +186,24 @@ def main():
                 per_dim_sq_base = np.zeros(action_dim, dtype=np.float64)
                 per_dim_abs_base = np.zeros(action_dim, dtype=np.float64)
 
-            per_dim_sq += np.mean((pred_np - gt_np) ** 2, axis=0)
-            per_dim_abs += np.mean(np.abs(pred_np - gt_np), axis=0)
-            per_dim_sq_base += np.mean(base_diff ** 2, axis=0)
-            per_dim_abs_base += np.mean(np.abs(base_diff), axis=0)
+            if action_mask is not None:
+                per_dim_sq += (diff_np ** 2 * mask_np).sum(axis=(0, 1)) / max(
+                    valid_steps, 1.0
+                )
+                per_dim_abs += (np.abs(diff_np) * mask_np).sum(axis=(0, 1)) / max(
+                    valid_steps, 1.0
+                )
+                per_dim_sq_base += (base_diff ** 2 * mask_np).sum(axis=(0, 1)) / max(
+                    valid_steps, 1.0
+                )
+                per_dim_abs_base += (
+                    np.abs(base_diff) * mask_np
+                ).sum(axis=(0, 1)) / max(valid_steps, 1.0)
+            else:
+                per_dim_sq += np.mean(diff_np ** 2, axis=(0, 1))
+                per_dim_abs += np.mean(np.abs(diff_np), axis=(0, 1))
+                per_dim_sq_base += np.mean(base_diff ** 2, axis=(0, 1))
+                per_dim_abs_base += np.mean(np.abs(base_diff), axis=(0, 1))
 
     avg_mse = sum_mse / max(count, 1)
     avg_l1 = sum_l1 / max(count, 1)
