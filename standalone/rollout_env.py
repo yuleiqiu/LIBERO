@@ -20,7 +20,14 @@ except ImportError:
 from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
 from libero.libero.utils.video_utils import VideoWriter
 
-from standalone.configs import RolloutConfig, apply_policy_config, get_policy_param
+from standalone.configs import (
+    DataConfig,
+    PolicyConfig,
+    RolloutConfig,
+    apply_policy_config,
+    get_policy_param,
+)
+from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     load_obs_stats,
@@ -33,6 +40,65 @@ DEFAULT_OBS_KEY_MAPPING = {
     "gripper_states": "robot0_gripper_qpos",
     "joint_states": "robot0_joint_pos",
 }
+
+
+def _is_missing_value(value, default):
+    if value is None or value == "":
+        return True
+    return value == default
+
+
+def _merge_dataclass_fields(target, source, defaults):
+    if not isinstance(source, dict):
+        return
+    for key, value in source.items():
+        if not hasattr(target, key):
+            continue
+        current = getattr(target, key)
+        default = getattr(defaults, key)
+        if _is_missing_value(current, default):
+            setattr(target, key, value)
+
+
+def _coerce_policy(policy):
+    if isinstance(policy, PolicyConfig):
+        return policy
+    if policy is None:
+        return PolicyConfig()
+    if isinstance(policy, str):
+        return PolicyConfig(name=policy)
+    if isinstance(policy, dict):
+        return PolicyConfig(**policy)
+    return PolicyConfig()
+
+
+def apply_ckpt_config(cfg, cfg_dict):
+    if not getattr(cfg, "use_ckpt_config", True):
+        return False
+    if not isinstance(cfg_dict, dict):
+        return False
+    if isinstance(cfg_dict.get("data"), dict):
+        _merge_dataclass_fields(cfg.data, cfg_dict["data"], DataConfig())
+    if isinstance(cfg_dict.get("policy"), dict):
+        policy_cfg = _coerce_policy(cfg.policy)
+        _merge_dataclass_fields(policy_cfg, cfg_dict["policy"], PolicyConfig())
+        ckpt_params = cfg_dict["policy"].get("params")
+        if isinstance(ckpt_params, dict):
+            current_params = getattr(policy_cfg, "params", None)
+            if isinstance(current_params, dict) and current_params:
+                merged_params = dict(ckpt_params)
+                merged_params.update(current_params)
+                policy_cfg.params = merged_params
+            elif _is_missing_value(current_params, {}):
+                policy_cfg.params = dict(ckpt_params)
+        cfg.policy = policy_cfg
+    ckpt_rollout = cfg_dict.get("rollout") if isinstance(cfg_dict.get("rollout"), dict) else {}
+    ckpt_env_horizon = ckpt_rollout.get("env_horizon")
+    if ckpt_env_horizon is None:
+        ckpt_env_horizon = cfg_dict.get("rollout_env_horizon")
+    if ckpt_env_horizon is not None and cfg.env_horizon == RolloutConfig().env_horizon:
+        cfg.env_horizon = int(ckpt_env_horizon)
+    return True
 
 
 def read_bddl_from_hdf5(hdf5_path):
@@ -314,6 +380,15 @@ def run_env_rollouts(
     cam_hw = infer_camera_size(image_shapes) if image_keys else None
 
     env_args = {"bddl_file_name": bddl_path}
+    env_horizon = getattr(cfg, "env_horizon", None)
+    if env_horizon is not None:
+        env_horizon = int(env_horizon)
+        env_args["horizon"] = env_horizon
+        min_needed = int(getattr(cfg, "steps", 0)) + int(getattr(cfg, "warmup_steps", 0))
+        if env_horizon < min_needed:
+            print(
+                "[warning] env_horizon < steps+warmup_steps; rollout may terminate early"
+            )
     if image_keys:
         if cam_hw is None:
             raise ValueError("image_keys provided but camera size could not be inferred")
@@ -363,27 +438,29 @@ def run_env_rollouts(
                 raise ValueError(
                     f"rollout_order_override index out of range: {idx} (0..{total_states - 1})"
                 )
-        n_eval = len(rollout_order)
+        n_rollouts = len(rollout_order)
     else:
-        n_eval = int(cfg.n_eval)
-        if n_eval <= 0:
-            raise ValueError("n_eval must be >= 1")
-        if n_eval > total_states:
-            print(f"[warning] n_eval={n_eval} > init_states={total_states}; clipping")
-            n_eval = total_states
+        n_rollouts = int(cfg.n_rollouts)
+        if n_rollouts <= 0:
+            raise ValueError("n_rollouts must be >= 1")
+        if n_rollouts > total_states:
+            print(
+                f"[warning] n_rollouts={n_rollouts} > init_states={total_states}; clipping"
+            )
+            n_rollouts = total_states
         start_idx = int(cfg.sample_index)
         if start_idx < 0 or start_idx >= total_states:
             raise ValueError(
                 f"sample_index out of range: {start_idx} (0..{total_states - 1})"
             )
-        rollout_order = [(start_idx + i) % total_states for i in range(n_eval)]
+        rollout_order = [(start_idx + i) % total_states for i in range(n_rollouts)]
 
     use_mp = bool(getattr(cfg, "use_mp", False))
     num_procs = int(getattr(cfg, "num_procs", 1))
     if num_procs <= 0:
         raise ValueError("num_procs must be >= 1")
-    env_num = min(num_procs, n_eval) if use_mp else 1
-    eval_loop_num = (n_eval + env_num - 1) // env_num
+    env_num = min(num_procs, n_rollouts) if use_mp else 1
+    rollout_loop_num = (n_rollouts + env_num - 1) // env_num
 
     max_steps = int(cfg.steps)
     if max_steps <= 0:
@@ -395,7 +472,7 @@ def run_env_rollouts(
         env.seed(cfg.data.seed)
         history = ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon)
         successes = 0
-        pbar = tqdm(total=n_eval, desc="rollout", leave=True)
+        pbar = tqdm(total=n_rollouts, desc="rollout", leave=True)
 
         for ep_idx, init_idx in enumerate(rollout_order):
             model.reset()
@@ -476,12 +553,12 @@ def run_env_rollouts(
         pbar.close()
         if video_writer:
             video_writer.save()
-        sr = successes / max(n_eval, 1)
+        sr = successes / max(n_rollouts, 1)
         print("[info] rollout summary:")
-        print(f"  rollouts: {n_eval}")
-        print(f"  success: {successes}/{n_eval} ({sr:.3f})")
+        print(f"  rollouts: {n_rollouts}")
+        print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
         return {
-            "n_eval": n_eval,
+            "n_rollouts": n_rollouts,
             "successes": successes,
             "success_rate": sr,
             "rollout_order": rollout_order,
@@ -493,22 +570,22 @@ def run_env_rollouts(
     env.seed(cfg.data.seed)
     histories = [ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon) for _ in range(env_num)]
 
-    max_record_videos = min(save_videos, n_eval)
+    max_record_videos = min(save_videos, n_rollouts)
     record_active = [False] * env_num
     video_ids = [None] * env_num
 
     successes = 0
     episodes_done = 0
-    pbar = tqdm(total=n_eval, desc="rollout", leave=True)
-    for loop_idx in range(eval_loop_num):
-        if episodes_done >= n_eval:
+    pbar = tqdm(total=n_rollouts, desc="rollout", leave=True)
+    for loop_idx in range(rollout_loop_num):
+        if episodes_done >= n_rollouts:
             break
         batch_start = episodes_done
         model.reset()
         for history in histories:
             history.reset()
 
-        remaining = min(env_num, n_eval - episodes_done)
+        remaining = min(env_num, n_rollouts - episodes_done)
         indices = rollout_order[episodes_done : episodes_done + remaining]
         if len(indices) < env_num:
             indices = indices + [indices[-1]] * (env_num - len(indices))
@@ -650,7 +727,7 @@ def run_env_rollouts(
         episodes_done += remaining
 
         print(
-            f"[rollout] batch {loop_idx} | episodes {episodes_done}/{n_eval} | steps {steps_taken}"
+            f"[rollout] batch {loop_idx} | episodes {episodes_done}/{n_rollouts} | steps {steps_taken}"
         )
         for i in range(remaining):
             print(
@@ -671,13 +748,13 @@ def run_env_rollouts(
     pbar.close()
     if video_writer:
         video_writer.save()
-    sr = successes / max(n_eval, 1)
+    sr = successes / max(n_rollouts, 1)
     print("[info] rollout summary:")
-    print(f"  rollouts: {n_eval}")
+    print(f"  rollouts: {n_rollouts}")
     print(f"  envs: {env_num} (use_mp={use_mp})")
-    print(f"  success: {successes}/{n_eval} ({sr:.3f})")
+    print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
     return {
-        "n_eval": n_eval,
+        "n_rollouts": n_rollouts,
         "successes": successes,
         "success_rate": sr,
         "rollout_order": rollout_order,
@@ -688,11 +765,24 @@ def run_env_rollouts(
 
 @draccus.wrap()
 def main(cfg: RolloutConfig):
+    if not cfg.ckpt:
+        raise ValueError("ckpt is required")
+    ckpt_path = Path(cfg.ckpt).expanduser().resolve()
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    run_config = None
+    config_path = ckpt_path.parent / TRAIN_CONFIG_NAME
+    if config_path.exists():
+        run_config = load_config_json(config_path)
+    elif isinstance(ckpt, dict) and isinstance(ckpt.get("config"), dict):
+        run_config = ckpt["config"]
+    if run_config is not None and apply_ckpt_config(cfg, run_config):
+        print("[info] using config from checkpoint")
+
     apply_policy_config(cfg)
     if not cfg.data.demo_file:
         raise ValueError("data.demo_file is required")
-    if not cfg.ckpt:
-        raise ValueError("ckpt is required")
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     all_keys = obs_keys + image_keys
@@ -701,10 +791,6 @@ def main(cfg: RolloutConfig):
     demo_path = Path(cfg.data.demo_file).expanduser().resolve()
     if not demo_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {demo_path}")
-
-    ckpt_path = Path(cfg.ckpt).expanduser().resolve()
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
     device = cfg.device if torch.cuda.is_available() else "cpu"
 
@@ -716,7 +802,6 @@ def main(cfg: RolloutConfig):
         action_shift=getattr(cfg.data, "action_shift", 0),
     )
 
-    ckpt = torch.load(ckpt_path, map_location="cpu")
     obs_stats = None
     if policy_name not in ("act", "cnnmlp"):
         if cfg.data.obs_stats_path:

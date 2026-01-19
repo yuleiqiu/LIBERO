@@ -9,23 +9,32 @@ data:
   train_ratio: 0.9
   val_ratio: 0.1
   seed: 10000
-policy:
-  config_path: standalone/configs/policies/cnnmlp.yaml
-batch_size: 2
-epochs: 1
-val_every: 10
-rollout_every: 20
-rollout_init_states_dir: null
-rollout_per_anchor: 2
-rollout_steps: 8
-rollout_warmup_steps: 5
-rollout_use_mp: false
-rollout_num_procs: 1
-lr: 0.0001
-device: "cuda:0"
-save_dir: "standalone/standalone_runs/run_001"
-grad_clip: 100.0
-use_wandb: false
-wandb_project: "libero-standalone"
-wandb_entity: null
-experiment_name: null
+
+policy: {}
+
+paths:
+  save_dir: "standalone/standalone_runs/run_001"
+
+training:
+  batch_size: 2
+  epochs: 1
+  val_every: 10
+  lr: 0.0001
+  grad_clip: 100.0
+  device: "cuda:0"
+
+rollout:
+  every: 20
+  init_states_dir: null
+  env_horizon: 2000
+  per_anchor: 2
+  steps: 8
+  warmup_steps: 5
+  use_mp: false
+  num_procs: 1
+
+logging:
+  use_wandb: false
+  wandb_project: "libero-standalone"
+  wandb_entity: null
+  experiment_name: null

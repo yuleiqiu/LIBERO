@@ -1,11 +1,10 @@
 import json
-import os
+import sys
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-import h5py
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler, Subset
@@ -16,14 +15,26 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import TrainConfig, apply_policy_config, get_policy_param
+from standalone.configs import TrainConfig, apply_policy_config
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
     load_obs_stats,
     save_obs_stats,
 )
-from standalone.models.policy.act_policy import ACTPolicy
+from standalone.models.policy.policy_factory import build_policy, get_policy_name
+from standalone.utils.train_utils import (
+    TRAIN_CONFIG_NAME,
+    apply_config_dict,
+    cfg_to_dict,
+    load_config_json,
+    load_init_states_with_anchors,
+    make_splits,
+    merge_config_with_overrides,
+    resolve_run_dir,
+    sample_per_anchor,
+    write_run_metadata,
+)
 
 
 def set_seed(seed):
@@ -32,107 +43,94 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def build_splits(dataset_len, train_ratio, val_ratio, seed):
-    assert train_ratio + val_ratio <= 1.0 + 1e-8
-    train_size = int(dataset_len * train_ratio)
-    val_size = int(dataset_len * val_ratio)
-    g = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(dataset_len, generator=g).tolist()
-    train_idx = indices[:train_size]
-    val_idx = indices[train_size : train_size + val_size]
-    eval_idx = indices[train_size + val_size :]
-    return train_idx, val_idx, eval_idx
+RESUME_OVERRIDE_ALLOWLIST = [
+    "training.device",
+    "logging.use_wandb",
+    "logging.wandb_project",
+    "logging.wandb_entity",
+    "logging.experiment_name",
+]
 
 
-def read_bddl_from_hdf5(hdf5_path):
-    with h5py.File(hdf5_path, "r") as f:
-        data = f["data"]
-        return data.attrs.get("bddl_file_name", None)
-
-
-def resolve_bddl_path(bddl_file_name, demo_path):
-    if not bddl_file_name:
-        return None
-    candidate = Path(bddl_file_name).expanduser()
-    if candidate.is_absolute() and candidate.exists():
-        return str(candidate)
-    if candidate.exists():
-        return str(candidate.resolve())
-    repo_root = Path(__file__).resolve().parents[1]
-    repo_candidate = (repo_root / "libero/libero/bddl_files" / candidate).resolve()
-    if repo_candidate.exists():
-        return str(repo_candidate)
-    demo_candidate = (demo_path.parent / candidate).resolve()
-    if demo_candidate.exists():
-        return str(demo_candidate)
-    return None
-
-
-def resolve_init_states_dir(cfg):
-    init_dir = getattr(cfg, "rollout_init_states_dir", None)
-    if init_dir:
-        return Path(init_dir).expanduser().resolve()
-    from libero.libero import get_libero_path
-
-    return Path(get_libero_path("init_states")).expanduser().resolve()
-
-
-def load_init_states_with_anchors(cfg, demo_path):
-    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
-    if bddl_file_name is None:
-        raise ValueError("bddl_file_name not found in hdf5; cannot resolve init states")
-    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
-    if bddl_path is None:
-        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
-    init_dir = resolve_init_states_dir(cfg)
-    init_states_path = init_dir / Path(bddl_path).parent.name / f"{Path(bddl_path).stem}.pruned_init"
-    if not init_states_path.exists():
-        raise FileNotFoundError(f"init states file not found: {init_states_path}")
-    init_states = torch.load(str(init_states_path))
-    if torch.is_tensor(init_states):
-        init_states = init_states.cpu().numpy()
-    else:
-        init_states = np.asarray(init_states)
-    anchors_meta = init_states_path.with_suffix(init_states_path.suffix + ".anchors.json")
-    if not anchors_meta.exists():
-        raise FileNotFoundError(f"anchors meta not found: {anchors_meta}")
-    with open(anchors_meta, "r") as f:
-        anchor_indices = json.load(f).get("anchor_idx", None)
-    if anchor_indices is None:
-        raise ValueError(f"anchor_idx not found in {anchors_meta}")
-    if len(anchor_indices) != init_states.shape[0]:
+def reject_draccus_config():
+    config_arg = None
+    for idx, arg in enumerate(sys.argv):
+        if arg == "--config" and idx + 1 < len(sys.argv):
+            config_arg = sys.argv[idx + 1]
+            break
+        if arg.startswith("--config="):
+            config_arg = arg.split("=", 1)[1]
+            break
+    if config_arg:
         raise ValueError(
-            f"anchor_idx length mismatch: {len(anchor_indices)} vs {init_states.shape[0]}"
+            "YAML configs are disabled. Use CLI overrides with dataclass defaults, "
+            "or pass saved_config_path/resume to load train_config.json."
         )
-    by_anchor = defaultdict(list)
-    for idx, anchor_id in enumerate(anchor_indices):
-        by_anchor[int(anchor_id)].append(idx)
-    return init_states, by_anchor, init_states_path, anchor_indices
 
 
-def sample_per_anchor(by_anchor, per_anchor, rng):
-    selected = []
-    for anchor_id in sorted(by_anchor.keys()):
-        indices = by_anchor[anchor_id]
-        if len(indices) < per_anchor:
-            raise ValueError(
-                f"anchor {anchor_id} has {len(indices)} states; need {per_anchor}"
-            )
-        picks = rng.choice(indices, size=per_anchor, replace=False)
-        selected.extend(picks.tolist())
-    rng.shuffle(selected)
-    return selected
+def apply_resume_config(cfg):
+    if not getattr(cfg, "resume", False) and not getattr(cfg, "saved_config_path", None):
+        return cfg, None
+    cfg_dict = cfg_to_dict(cfg)
+    config_path = None
+    if cfg.saved_config_path:
+        config_path = Path(cfg.saved_config_path).expanduser().resolve()
+    if config_path is None and getattr(cfg, "resume", False):
+        config_path = (
+            Path(cfg.paths.save_dir).expanduser().resolve() / TRAIN_CONFIG_NAME
+        )
+    if config_path is None:
+        return cfg, None
+    if config_path.suffix.lower() in (".yml", ".yaml"):
+        raise ValueError(
+            "YAML configs are disabled. Use train_config.json or CLI overrides."
+        )
+    if not config_path.exists():
+        if config_path.name == TRAIN_CONFIG_NAME:
+            legacy_path = config_path.with_name("config.json")
+            if legacy_path.exists():
+                config_path = legacy_path
+            else:
+                raise FileNotFoundError(f"config not found: {config_path}")
+        else:
+            raise FileNotFoundError(f"config not found: {config_path}")
+    saved_cfg = load_config_json(config_path)
+    if "saved_config_path" not in saved_cfg and "config_path" in saved_cfg:
+        saved_cfg["saved_config_path"] = saved_cfg["config_path"]
+    defaults_dict = cfg_to_dict(TrainConfig())
+    merged_cfg = merge_config_with_overrides(
+        saved_cfg, cfg_dict, RESUME_OVERRIDE_ALLOWLIST, defaults=defaults_dict
+    )
+    merged_cfg["saved_config_path"] = str(config_path)
+    merged_cfg["resume"] = bool(getattr(cfg, "resume", False))
+    apply_config_dict(cfg, merged_cfg)
+    if getattr(cfg, "resume", False):
+        cfg.paths.save_dir = str(config_path.parent)
+    return cfg, config_path
 
 
 @draccus.wrap()
 def main(cfg: TrainConfig):
+    reject_draccus_config()
+    cfg, _ = apply_resume_config(cfg)
     apply_policy_config(cfg)
     if not cfg.data.demo_file:
         raise ValueError("data.demo_file is required")
     set_seed(cfg.data.seed)
 
+    if cfg.resume:
+        save_dir = Path(cfg.paths.save_dir).expanduser().resolve()
+        if not save_dir.exists():
+            raise FileNotFoundError(f"resume dir not found: {save_dir}")
+        print(f"[info] resuming in {save_dir}")
+    else:
+        save_dir = resolve_run_dir(Path(cfg.paths.save_dir))
+        save_dir.mkdir(parents=True, exist_ok=True)
+        cfg.paths.save_dir = str(save_dir)
+        print(f"[info] saving to {save_dir}")
+
     wandb = None
-    if cfg.use_wandb:
+    if cfg.logging.use_wandb:
         try:
             import wandb as wandb_lib
         except ImportError as exc:
@@ -153,12 +151,12 @@ def main(cfg: TrainConfig):
             else:
                 wandb_config["policy"] = getattr(policy_cfg, "__dict__", str(policy_cfg))
         wandb.init(
-            project=cfg.wandb_project,
-            entity=cfg.wandb_entity or None,
+            project=cfg.logging.wandb_project,
+            entity=cfg.logging.wandb_entity or None,
             config=wandb_config,
         )
-        if cfg.experiment_name:
-            wandb.run.name = cfg.experiment_name
+        if cfg.logging.experiment_name:
+            wandb.run.name = cfg.logging.experiment_name
 
     demo_path = Path(cfg.data.demo_file).expanduser().resolve()
     if not demo_path.exists():
@@ -167,28 +165,30 @@ def main(cfg: TrainConfig):
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     all_keys = obs_keys + image_keys
-    policy_name = getattr(cfg.policy, "name", "mlp").lower()
+    policy_name = get_policy_name(cfg)
     if policy_name in ("act", "cnnmlp") and cfg.data.normalize_obs:
         print("[warn] ACT/CNNMLP policy ignores obs normalization; disabling normalize_obs.")
         cfg.data.normalize_obs = False
+    if not cfg.resume:
+        write_run_metadata(save_dir, cfg)
 
-    save_dir = Path(cfg.save_dir).expanduser().resolve()
-    save_dir.mkdir(parents=True, exist_ok=True)
     split_path = save_dir / "split_indices.json"
 
-    device = cfg.device if torch.cuda.is_available() else "cpu"
-    val_every = int(cfg.val_every)
-    rollout_every = int(cfg.rollout_every)
+    device = cfg.training.device if torch.cuda.is_available() else "cpu"
+    val_every = int(cfg.training.val_every)
+    rollout_every = int(cfg.rollout.every)
     if val_every < 0:
         raise ValueError("val_every must be >= 0")
     if rollout_every < 0:
         raise ValueError("rollout_every must be >= 0")
-    if cfg.rollout_steps <= 0:
+    if cfg.rollout.steps <= 0:
         raise ValueError("rollout_steps must be >= 1")
-    if cfg.rollout_warmup_steps < 0:
+    if cfg.rollout.warmup_steps < 0:
         raise ValueError("rollout_warmup_steps must be >= 0")
-    if cfg.rollout_num_procs <= 0:
+    if cfg.rollout.num_procs <= 0:
         raise ValueError("rollout_num_procs must be >= 1")
+    if cfg.rollout.env_horizon <= 0:
+        raise ValueError("rollout.env_horizon must be >= 1")
 
     base_dataset = HDF5SequenceDataset(
         hdf5_path=str(demo_path),
@@ -198,17 +198,16 @@ def main(cfg: TrainConfig):
         action_shift=getattr(cfg.data, "action_shift", 0),
     )
 
-    train_idx, val_idx, eval_idx = build_splits(
+    train_idx, val_idx = make_splits(
         len(base_dataset), cfg.data.train_ratio, cfg.data.val_ratio, cfg.data.seed
     )
     with open(split_path, "w") as f:
-        json.dump({"train": train_idx, "val": val_idx, "eval": eval_idx}, f, indent=2)
+        json.dump({"train": train_idx, "val": val_idx}, f, indent=2)
     if wandb is not None:
         wandb.run.summary.update(
             {
                 "split/train_size": len(train_idx),
                 "split/val_size": len(val_idx),
-                "split/eval_size": len(eval_idx),
             }
         )
 
@@ -236,7 +235,7 @@ def main(cfg: TrainConfig):
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=cfg.batch_size,
+        batch_size=cfg.training.batch_size,
         sampler=RandomSampler(train_dataset),
         num_workers=0,
         pin_memory=torch.cuda.is_available(),
@@ -245,7 +244,7 @@ def main(cfg: TrainConfig):
     if len(val_dataset) > 0:
         val_loader = DataLoader(
             val_dataset,
-            batch_size=cfg.batch_size,
+            batch_size=cfg.training.batch_size,
             shuffle=False,
             num_workers=0,
             pin_memory=torch.cuda.is_available(),
@@ -254,9 +253,6 @@ def main(cfg: TrainConfig):
     sample = base_dataset[train_idx[0]]
     action_dim = sample["actions"].shape[-1]
     # print(f"[debug] action_dim: {action_dim}")
-    exec_horizon = get_policy_param(cfg, "exec_horizon")
-    if policy_name not in ("act", "cnnmlp"):
-        raise ValueError(f"unsupported policy: {policy_name}")
     qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
     # print(f"[debug] qpos_dim: {qpos_dim}")
     image_shapes = {}
@@ -264,23 +260,13 @@ def main(cfg: TrainConfig):
         if key not in sample["obs"]:
             raise KeyError(f"image key not found in obs: {key}")
         image_shapes[key] = sample["obs"][key].shape[1:]
-    model = ACTPolicy(
-        obs_keys=obs_keys,
-        image_keys=image_keys,
-        obs_horizon=cfg.data.obs_horizon,
-        predict_horizon=cfg.data.predict_horizon,
-        exec_horizon=exec_horizon,
-        qpos_dim=qpos_dim,
-        action_dim=action_dim,
-        model_type=policy_name,
-        act_config=get_policy_param(cfg, "act_config"),
-    )
+    model = build_policy(cfg, obs_keys, image_keys, action_dim, qpos_dim)
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.lr)
 
     rollout_state = None
     if rollout_every > 0:
-        if cfg.rollout_per_anchor <= 0:
+        if cfg.rollout.per_anchor <= 0:
             raise ValueError("rollout_per_anchor must be >= 1")
         init_states, anchor_map, init_states_path, anchor_indices = load_init_states_with_anchors(
             cfg, demo_path
@@ -308,7 +294,7 @@ def main(cfg: TrainConfig):
 
     best_val = None
     printed_batch = False
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(1, cfg.training.epochs + 1):
         model.train()
         train_losses = []
         train_stats = {}
@@ -352,8 +338,8 @@ def main(cfg: TrainConfig):
 
             optimizer.zero_grad()
             loss.backward()
-            if cfg.grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            if cfg.training.grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.training.grad_clip)
             optimizer.step()
             train_losses.append(loss.item())
             if stats:
@@ -404,21 +390,22 @@ def main(cfg: TrainConfig):
         if rollout_runner is not None and epoch % rollout_every == 0:
             rng = np.random.default_rng(cfg.data.seed + epoch)
             rollout_indices = sample_per_anchor(
-                rollout_state["anchor_map"], cfg.rollout_per_anchor, rng
+                rollout_state["anchor_map"], cfg.rollout.per_anchor, rng
             )
             video_dir = save_dir / "rollout_videos" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
-                steps=int(cfg.rollout_steps),
-                warmup_steps=int(cfg.rollout_warmup_steps),
-                n_eval=len(rollout_indices),
+                steps=int(cfg.rollout.steps),
+                warmup_steps=int(cfg.rollout.warmup_steps),
+                n_rollouts=len(rollout_indices),
+                env_horizon=int(cfg.rollout.env_horizon),
                 sample_index=0,
                 save_videos=len(rollout_indices),
                 video_camera="",
                 video_fps=30,
                 video_dir=str(video_dir),
-                use_mp=bool(cfg.rollout_use_mp),
-                num_procs=int(cfg.rollout_num_procs),
+                use_mp=bool(cfg.rollout.use_mp),
+                num_procs=int(cfg.rollout.num_procs),
             )
             rollout_details = rollout_runner(
                 rollout_cfg,

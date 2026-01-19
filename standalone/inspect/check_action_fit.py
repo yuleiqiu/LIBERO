@@ -4,32 +4,35 @@ Evaluate action prediction fit on a demo dataset without rollout.
 """
 
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import torch
 
-try:
-    import yaml
-except ImportError as exc:
-    raise ImportError("pyyaml is required; install with `pip install pyyaml`.") from exc
-
 from torch.utils.data import DataLoader
 
 from standalone.configs import DataConfig, apply_policy_config, get_policy_param
+from standalone.utils.train_utils import TRAIN_CONFIG_NAME
 from standalone.dataset_utils.hdf5_sequence_dataset import HDF5SequenceDataset
 from standalone.models.policy.act_policy import ACTPolicy
 
 
 def load_cfg(cfg_path: Path):
     with open(cfg_path, "r") as f:
-        raw = yaml.safe_load(f) or {}
+        raw = json.load(f)
     data_cfg = DataConfig()
     for key, value in (raw.get("data") or {}).items():
         setattr(data_cfg, key, value)
     policy_cfg = raw.get("policy") or {}
-    cfg = SimpleNamespace(data=data_cfg, policy=policy_cfg, batch_size=raw.get("batch_size", 32))
+    training_cfg = raw.get("training") or {}
+    batch_size = training_cfg.get("batch_size", raw.get("batch_size", 32))
+    cfg = SimpleNamespace(
+        data=data_cfg,
+        policy=policy_cfg,
+        training=SimpleNamespace(batch_size=batch_size),
+    )
     apply_policy_config(cfg)
     return cfg
 
@@ -52,26 +55,29 @@ def main():
     parser.add_argument("--demo-file", required=True, help="Path to processed *_demo.hdf5")
     parser.add_argument(
         "--config",
-        default="standalone/configs/train_cnnmlp_quickcheck.yaml",
-        help="Training config used to build the model",
+        default="",
+        help="Path to train_config.json (defaults to ckpt directory)",
     )
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     args = parser.parse_args()
 
-    cfg_path = Path(args.config).expanduser().resolve()
+    ckpt_path = Path(args.ckpt).expanduser().resolve()
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
+    cfg_path = (
+        Path(args.config).expanduser().resolve()
+        if args.config
+        else ckpt_path.parent / TRAIN_CONFIG_NAME
+    )
     if not cfg_path.exists():
         raise FileNotFoundError(f"config not found: {cfg_path}")
     cfg = load_cfg(cfg_path)
     if args.batch_size:
-        cfg.batch_size = args.batch_size
+        cfg.training.batch_size = args.batch_size
 
     demo_path = Path(args.demo_file).expanduser().resolve()
     if not demo_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {demo_path}")
-
-    ckpt_path = Path(args.ckpt).expanduser().resolve()
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
 
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
@@ -87,7 +93,7 @@ def main():
     )
     loader = DataLoader(
         dataset,
-        batch_size=int(cfg.batch_size),
+        batch_size=int(cfg.training.batch_size),
         shuffle=False,
         num_workers=0,
         pin_memory=torch.cuda.is_available(),

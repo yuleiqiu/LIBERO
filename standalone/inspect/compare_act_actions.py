@@ -4,22 +4,19 @@ Compare first-step actions from a trained ACT policy across different init state
 """
 
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import torch
 
-try:
-    import yaml
-except ImportError as exc:
-    raise ImportError("pyyaml is required; install with `pip install pyyaml`.") from exc
-
 import imageio
 from PIL import Image, ImageDraw, ImageFont
 
 from libero.libero.envs import OffScreenRenderEnv
 from standalone.configs import DataConfig, apply_policy_config, get_policy_param
+from standalone.utils.train_utils import TRAIN_CONFIG_NAME
 from standalone.dataset_utils.hdf5_sequence_dataset import HDF5SequenceDataset
 from standalone.models.policy.act_policy import ACTPolicy
 from standalone.rollout_env import (
@@ -48,7 +45,7 @@ def parse_indices(raw: str):
 
 def load_cfg(cfg_path: Path):
     with open(cfg_path, "r") as f:
-        raw = yaml.safe_load(f) or {}
+        raw = json.load(f)
     data_cfg = DataConfig()
     for key, value in (raw.get("data") or {}).items():
         setattr(data_cfg, key, value)
@@ -142,8 +139,8 @@ def main():
     parser.add_argument("--demo-file", required=True, help="Path to processed *_demo.hdf5")
     parser.add_argument(
         "--config",
-        default=str(repo_root / "standalone/configs/train_act.yaml"),
-        help="Training config used to build the model",
+        default="",
+        help="Path to train_config.json (defaults to ckpt directory)",
     )
     parser.add_argument(
         "--init-states",
@@ -183,11 +180,6 @@ def main():
     )
     args = parser.parse_args()
 
-    cfg_path = Path(args.config).expanduser().resolve()
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"config not found: {cfg_path}")
-    cfg = load_cfg(cfg_path)
-
     demo_path = Path(args.demo_file).expanduser().resolve()
     if not demo_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {demo_path}")
@@ -195,6 +187,14 @@ def main():
     ckpt_path = Path(args.ckpt).expanduser().resolve()
     if not ckpt_path.exists():
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
+    cfg_path = (
+        Path(args.config).expanduser().resolve()
+        if args.config
+        else ckpt_path.parent / TRAIN_CONFIG_NAME
+    )
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"config not found: {cfg_path}")
+    cfg = load_cfg(cfg_path)
 
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
