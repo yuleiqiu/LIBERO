@@ -23,7 +23,15 @@ class TrainLoopConfig:
 @dataclass
 class TrainRolloutConfig:
     every: int = 20
-    init_states_dir: Optional[str] = None
+    init_states_dir: Optional[str] = field(
+        default="./libero/libero/init_files",
+        metadata={
+            "help": (
+                "Root directory for init states (e.g., ./libero/libero/init_files). "
+                "Use the directory, not a single .init file."
+            )
+        },
+    )
     env_horizon: int = 2000
     per_anchor: int = 2
     steps: int = 8
