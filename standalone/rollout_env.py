@@ -35,10 +35,12 @@ from standalone.dataset_utils.hdf5_sequence_dataset import (
 from standalone.models.policy.act_policy import ACTPolicy
 
 DEFAULT_OBS_KEY_MAPPING = {
+    # TODO: This mapping is aligned with LIBERO/robosuite defaults (see libero/configs/data/default.yaml).
     "agentview_rgb": "agentview_image",
     "eye_in_hand_rgb": "robot0_eye_in_hand_image",
     "gripper_states": "robot0_gripper_qpos",
     "joint_states": "robot0_joint_pos",
+    "ee_pos": "robot0_eef_pos",
 }
 
 
