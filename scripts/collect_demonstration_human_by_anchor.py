@@ -124,68 +124,104 @@ def unwrap_reset_obs(obs):
     return obs
 
 
-def gather_demonstrations_as_hdf5(
-    directory, out_dir, env_info, args, remove_directory=None, anchor_idx=None, anchor_map=None
-):
-    hdf5_path = os.path.join(out_dir, "demo.hdf5")
-    f = h5py.File(hdf5_path, "w")
+def get_next_demo_index(grp):
+    demo_keys = [k for k in grp.keys() if k.startswith("demo_")]
+    if not demo_keys:
+        return 1
+    indices = []
+    for key in demo_keys:
+        try:
+            indices.append(int(key.split("_")[1]))
+        except Exception:
+            continue
+    return max(indices) + 1 if indices else 1
 
-    grp = f.create_group("data")
 
-    num_eps = 0
+def ensure_hdf5_group(f, env_info, args, env_name):
+    if "data" in f:
+        grp = f["data"]
+    else:
+        grp = f.create_group("data")
+
+    if "date" not in grp.attrs:
+        now = datetime.datetime.now()
+        grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
+        grp.attrs["time"] = "{}:{}:{}".format(now.hour, now.minute, now.second)
+        grp.attrs["repository_version"] = suite.__version__
+    if "env_info" not in grp.attrs:
+        grp.attrs["env_info"] = env_info
+    if "problem_info" not in grp.attrs:
+        grp.attrs["problem_info"] = json.dumps(problem_info)
+    if "bddl_file_name" not in grp.attrs:
+        grp.attrs["bddl_file_name"] = args.bddl_file
+    if "bddl_file_content" not in grp.attrs:
+        grp.attrs["bddl_file_content"] = str(
+            open(args.bddl_file, "r", encoding="utf-8")
+        )
+    if "env" not in grp.attrs and env_name is not None:
+        grp.attrs["env"] = env_name
+
+    return grp
+
+
+def append_demo_to_hdf5(directory, ep_directory, out_dir, env_info, args, anchor_idx=None):
+    state_paths = os.path.join(directory, ep_directory, "state_*.npz")
+    states = []
+    actions = []
     env_name = None
 
-    remove_directory = remove_directory or []
-    anchor_map = anchor_map or {}
+    for state_file in sorted(glob(state_paths)):
+        dic = np.load(state_file, allow_pickle=True)
+        env_name = str(dic["env"])
 
-    for ep_directory in sorted(os.listdir(directory)):
-        if ep_directory in remove_directory:
-            continue
-        state_paths = os.path.join(directory, ep_directory, "state_*.npz")
-        states = []
-        actions = []
+        states.extend(dic["states"])
+        for ai in dic["action_infos"]:
+            actions.append(ai["actions"])
 
-        for state_file in sorted(glob(state_paths)):
-            dic = np.load(state_file, allow_pickle=True)
-            env_name = str(dic["env"])
+    if len(states) == 0:
+        return False
 
-            states.extend(dic["states"])
-            for ai in dic["action_infos"]:
-                actions.append(ai["actions"])
+    del states[-1]
+    assert len(states) == len(actions)
 
-        if len(states) == 0:
-            continue
+    xml_path = os.path.join(directory, ep_directory, "model.xml")
+    with open(xml_path, "r") as f_xml:
+        xml_str = f_xml.read()
 
-        del states[-1]
-        assert len(states) == len(actions)
-
-        num_eps += 1
-        ep_data_grp = grp.create_group("demo_{}".format(num_eps))
-
-        xml_path = os.path.join(directory, ep_directory, "model.xml")
-        with open(xml_path, "r") as f_xml:
-            xml_str = f_xml.read()
+    hdf5_path = os.path.join(out_dir, "demo.hdf5")
+    with h5py.File(hdf5_path, "a") as f:
+        grp = ensure_hdf5_group(f, env_info, args, env_name)
+        demo_idx = get_next_demo_index(grp)
+        ep_data_grp = grp.create_group("demo_{}".format(demo_idx))
         ep_data_grp.attrs["model_file"] = xml_str
-
         ep_data_grp.create_dataset("states", data=np.array(states))
         ep_data_grp.create_dataset("actions", data=np.array(actions))
+        if anchor_idx is not None:
+            ep_data_grp.attrs["anchor_idx"] = int(anchor_idx)
+    return True
 
-        anchor_val = anchor_map.get(ep_directory, anchor_idx)
-        if anchor_val is not None:
-            ep_data_grp.attrs["anchor_idx"] = int(anchor_val)
 
-    now = datetime.datetime.now()
-    grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
-    grp.attrs["time"] = "{}:{}:{}".format(now.hour, now.minute, now.second)
-    grp.attrs["repository_version"] = suite.__version__
-    grp.attrs["env"] = env_name
-    grp.attrs["env_info"] = env_info
-
-    grp.attrs["problem_info"] = json.dumps(problem_info)
-    grp.attrs["bddl_file_name"] = args.bddl_file
-    grp.attrs["bddl_file_content"] = str(open(args.bddl_file, "r", encoding="utf-8"))
-
-    f.close()
+def load_anchor_counts(hdf5_path, num_anchors):
+    counts = {idx: 0 for idx in range(num_anchors)}
+    if not os.path.exists(hdf5_path):
+        return counts
+    with h5py.File(hdf5_path, "r") as f:
+        data = f.get("data", None)
+        if data is None:
+            return counts
+        for key in data.keys():
+            if not key.startswith("demo_"):
+                continue
+            anchor_idx = data[key].attrs.get("anchor_idx", None)
+            if anchor_idx is None:
+                continue
+            try:
+                anchor_idx = int(anchor_idx)
+            except Exception:
+                continue
+            if anchor_idx in counts:
+                counts[anchor_idx] += 1
+    return counts
 
 
 if __name__ == "__main__":
@@ -211,6 +247,12 @@ if __name__ == "__main__":
         type=float,
         default=0.01,
         help="Tolerance when matching target position to anchor ranges.",
+    )
+    parser.add_argument(
+        "--resume-dir",
+        type=str,
+        default=None,
+        help="Existing output directory to append new demos.",
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--vendor-id", type=int, default=9583)
@@ -286,18 +328,23 @@ if __name__ == "__main__":
         )
 
     t1, t2 = str(time.time()).split(".")
-    new_dir = os.path.join(
+    default_dir = os.path.join(
         args.directory,
         f"{domain_name}_ln_{problem_name}_{t1}_{t2}_"
         + language_instruction.replace(" ", "_").strip('""'),
     )
+    new_dir = os.path.abspath(args.resume_dir) if args.resume_dir else default_dir
     os.makedirs(new_dir, exist_ok=True)
 
-    remove_directory = []
     anchor_counts = {idx: 0 for idx in range(len(anchor_ranges))}
     total_needed = args.per_anchor * len(anchor_ranges)
-    collected = 0
-    anchor_map = {}
+    if args.resume_dir:
+        hdf5_path = os.path.join(new_dir, "demo.hdf5")
+        anchor_counts = load_anchor_counts(hdf5_path, len(anchor_ranges))
+        collected = sum(anchor_counts.values())
+        print(f"[info] resuming from {hdf5_path} with {collected} demos")
+    else:
+        collected = 0
 
     while collected < total_needed:
         reset_success = False
@@ -328,8 +375,6 @@ if __name__ == "__main__":
         if ep_dir:
             ep_dir = os.path.basename(ep_dir)
         if not saving:
-            if ep_dir:
-                remove_directory.append(ep_dir)
             env.close()
             continue
         if not ep_dir:
@@ -337,17 +382,13 @@ if __name__ == "__main__":
             env.close()
             continue
 
-        anchor_map[ep_dir] = anchor_idx
+        if not append_demo_to_hdf5(
+            tmp_directory, ep_dir, new_dir, env_info, args, anchor_idx
+        ):
+            print("[warning] failed to write episode data; skipping")
+            env.close()
+            continue
         anchor_counts[anchor_idx] += 1
-        gather_demonstrations_as_hdf5(
-            tmp_directory,
-            new_dir,
-            env_info,
-            args,
-            remove_directory,
-            anchor_idx=anchor_idx,
-            anchor_map=anchor_map,
-        )
         collected += 1
         print(
             f"Collected demo {collected}/{total_needed} "
