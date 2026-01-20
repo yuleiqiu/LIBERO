@@ -14,18 +14,11 @@ class ACTConfig:
     exec_horizon: Optional[int] = None
     act_config: Dict[str, Any] = field(
         default_factory=lambda: {
-            "lr": 1e-4,
             "lr_backbone": 1e-5,
-            "batch_size": 2,
-            "weight_decay": 1e-4,
-            "epochs": 300,
-            "lr_drop": 200,
-            # "clip_max_norm": 0.1,
             "kl_weight": 10.0,
             "backbone": "resnet18",
             "dilation": False,
             "position_embedding": "sine",
-            "camera_names": [],
             "image_norm": "none",
             "enc_layers": 4,
             "dec_layers": 6,
@@ -33,11 +26,8 @@ class ACTConfig:
             "hidden_dim": 256,
             "dropout": 0.1,
             "nheads": 8,
-            "num_queries": 400,
             "pre_norm": False,
-            "masks": False,
-            "qpos_dim": 14,
-            "action_dim": 14,
+            "masks": False,  # TODO: rename to return_interm_layers (backbone intermediate outputs).
         }
     )
 
