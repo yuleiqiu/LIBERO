@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from standalone.configs.data import DataConfig
 from standalone.configs.policy import PolicyConfig
@@ -53,7 +53,7 @@ class TrainConfig:
     resume: bool = False
     saved_config_path: Optional[str] = None
     data: DataConfig = field(default_factory=DataConfig)
-    policy: Any = field(default_factory=PolicyConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     training: TrainLoopConfig = field(default_factory=TrainLoopConfig)
     rollout: TrainRolloutConfig = field(default_factory=TrainRolloutConfig)

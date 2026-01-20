@@ -10,7 +10,7 @@ CLI-only usage:
 ```bash
 python standalone/train.py \
   --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
-  --policy=act \
+  --policy.name=act \
   --paths.save_dir=standalone/standalone_runs/train_act_quickcheck
 ```
 
@@ -19,7 +19,7 @@ CNNMLP example:
 ```bash
 python standalone/train.py \
   --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
-  --policy=cnnmlp \
+  --policy.name=cnnmlp \
   --paths.save_dir=standalone/standalone_runs/train_cnnmlp_quickcheck
 ```
 
@@ -48,8 +48,9 @@ Train config fields (grouped):
 - `data.normalize_obs`, `data.obs_stats_path`: observation normalization settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
-- `policy.config_path`: disabled; use dataclass defaults and CLI overrides.
-- `policy.params`: inline overrides merged into the policy config.
+- `policy.name`: policy type (`act` or `cnnmlp`).
+- `policy.act.*`: ACT-specific overrides (e.g., `policy.act.enc_layers`).
+- `policy.cnnmlp.*`: CNNMLP-specific overrides.
 - `resume`, `saved_config_path`: resume from an existing run config (JSON).
 - `paths.save_dir`: base directory for run outputs (see below).
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
@@ -93,7 +94,8 @@ Each run directory stores:
 - If you pass a `paths.save_dir` that already ends with `run_###`, it will be used
   as-is (no auto-increment).
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
-- Policy configs are dataclass-backed; `policy.config_path` is disabled.
+- Policy configs are dataclass-backed; set `policy.name` and override
+  `policy.act.*` or `policy.cnnmlp.*`.
 - `resume: true` loads `train_config.json` from `paths.save_dir` (or `saved_config_path`),
   and `saved_config_path` alone can be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`

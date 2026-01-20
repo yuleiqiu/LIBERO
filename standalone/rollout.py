@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
@@ -8,7 +9,12 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import RolloutConfig, apply_policy_config, get_policy_param
+from standalone.configs import (
+    RolloutConfig,
+    apply_policy_config,
+    get_policy_param,
+    normalize_policy_cli_args,
+)
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     load_obs_stats,
@@ -93,4 +99,5 @@ def main(cfg: RolloutConfig):
 
 
 if __name__ == "__main__":
+    normalize_policy_cli_args(sys.argv)
     main()

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from standalone.configs.data import DataConfig
 from standalone.configs.policy import PolicyConfig
@@ -8,7 +8,7 @@ from standalone.configs.policy import PolicyConfig
 @dataclass
 class RolloutConfig:
     data: DataConfig = field(default_factory=DataConfig)
-    policy: Any = field(default_factory=PolicyConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
     ckpt: str = ""
     use_ckpt_config: bool = True
     init_states: Optional[str] = None

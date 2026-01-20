@@ -24,5 +24,5 @@ def build_policy(cfg, obs_keys, image_keys, action_dim, qpos_dim):
         qpos_dim=qpos_dim,
         action_dim=action_dim,
         model_type=policy_name,
-        act_config=resolved.act_config,
+        act_config=resolved.act_config_dict(),
     )

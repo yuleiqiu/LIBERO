@@ -5,6 +5,7 @@ from standalone.configs.policy import (
     PolicyConfig,
     apply_policy_config,
     get_policy_param,
+    normalize_policy_cli_args,
     resolve_policy_config,
 )
 from standalone.configs.rollout import RolloutConfig
@@ -29,5 +30,6 @@ __all__ = [
     "RolloutConfig",
     "apply_policy_config",
     "get_policy_param",
+    "normalize_policy_cli_args",
     "resolve_policy_config",
 ]

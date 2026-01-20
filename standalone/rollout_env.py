@@ -1,5 +1,7 @@
 from collections import defaultdict, deque
+from dataclasses import is_dataclass
 from pathlib import Path
+import sys
 
 import h5py
 import numpy as np
@@ -21,11 +23,14 @@ from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
 from libero.libero.utils.video_utils import VideoWriter
 
 from standalone.configs import (
+    ACTConfig,
+    CNNMLPConfig,
     DataConfig,
     PolicyConfig,
     RolloutConfig,
     apply_policy_config,
     get_policy_param,
+    normalize_policy_cli_args,
 )
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
 from standalone.dataset_utils.hdf5_sequence_dataset import (
@@ -58,19 +63,38 @@ def _merge_dataclass_fields(target, source, defaults):
             continue
         current = getattr(target, key)
         default = getattr(defaults, key)
+        if is_dataclass(current) and isinstance(value, dict):
+            _merge_dataclass_fields(current, value, default)
+            continue
         if _is_missing_value(current, default):
             setattr(target, key, value)
 
 
 def _coerce_policy(policy):
     if isinstance(policy, PolicyConfig):
+        if isinstance(policy.act, dict):
+            policy.act = ACTConfig(**policy.act)
+        elif policy.act is None:
+            policy.act = ACTConfig()
+        if isinstance(policy.cnnmlp, dict):
+            policy.cnnmlp = CNNMLPConfig(**policy.cnnmlp)
+        elif policy.cnnmlp is None:
+            policy.cnnmlp = CNNMLPConfig()
         return policy
     if policy is None:
         return PolicyConfig()
     if isinstance(policy, str):
         return PolicyConfig(name=policy)
     if isinstance(policy, dict):
-        return PolicyConfig(**policy)
+        act_value = policy.get("act")
+        cnnmlp_value = policy.get("cnnmlp")
+        return PolicyConfig(
+            name=policy.get("name", "cnnmlp"),
+            act=ACTConfig(**act_value) if isinstance(act_value, dict) else ACTConfig(),
+            cnnmlp=CNNMLPConfig(**cnnmlp_value)
+            if isinstance(cnnmlp_value, dict)
+            else CNNMLPConfig(),
+        )
     return PolicyConfig()
 
 
@@ -84,15 +108,6 @@ def apply_ckpt_config(cfg, cfg_dict):
     if isinstance(cfg_dict.get("policy"), dict):
         policy_cfg = _coerce_policy(cfg.policy)
         _merge_dataclass_fields(policy_cfg, cfg_dict["policy"], PolicyConfig())
-        ckpt_params = cfg_dict["policy"].get("params")
-        if isinstance(ckpt_params, dict):
-            current_params = getattr(policy_cfg, "params", None)
-            if isinstance(current_params, dict) and current_params:
-                merged_params = dict(ckpt_params)
-                merged_params.update(current_params)
-                policy_cfg.params = merged_params
-            elif _is_missing_value(current_params, {}):
-                policy_cfg.params = dict(ckpt_params)
         cfg.policy = policy_cfg
     ckpt_rollout = cfg_dict.get("rollout") if isinstance(cfg_dict.get("rollout"), dict) else {}
     ckpt_env_horizon = ckpt_rollout.get("env_horizon")
@@ -860,4 +875,5 @@ def main(cfg: RolloutConfig):
 
 
 if __name__ == "__main__":
+    normalize_policy_cli_args(sys.argv)
     main()

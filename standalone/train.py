@@ -15,7 +15,7 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import TrainConfig, apply_policy_config
+from standalone.configs import TrainConfig, apply_policy_config, normalize_policy_cli_args
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
@@ -465,4 +465,5 @@ def main(cfg: TrainConfig):
 
 
 if __name__ == "__main__":
+    normalize_policy_cli_args(sys.argv)
     main()

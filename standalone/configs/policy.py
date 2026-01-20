@@ -1,107 +1,106 @@
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Optional
-
-
-@dataclass
-class PolicyConfig:
-    name: str = "cnnmlp"
-    config_path: Optional[str] = None
-    params: Dict[str, Any] = field(default_factory=dict)
+from typing import Optional
 
 
 @dataclass
 class ACTConfig:
     exec_horizon: Optional[int] = None
-    act_config: Dict[str, Any] = field(
-        default_factory=lambda: {
-            "lr_backbone": 1e-5,
-            "kl_weight": 10.0,
-            "backbone": "resnet18",
-            "dilation": False,
-            "position_embedding": "sine",
-            "image_norm": "none",
-            "enc_layers": 4,
-            "dec_layers": 6,
-            "dim_feedforward": 2048,
-            "hidden_dim": 256,
-            "dropout": 0.1,
-            "nheads": 8,
-            "pre_norm": False,
-            "masks": False,  # TODO: rename to return_interm_layers (backbone intermediate outputs).
-        }
-    )
+    lr_backbone: float = 1e-5
+    kl_weight: float = 10.0
+    backbone: str = "resnet18"
+    dilation: bool = False
+    position_embedding: str = "sine"
+    image_norm: str = "none"
+    enc_layers: int = 4
+    dec_layers: int = 6
+    dim_feedforward: int = 2048
+    hidden_dim: int = 256
+    dropout: float = 0.1
+    nheads: int = 8
+    pre_norm: bool = False
+    masks: bool = False  # TODO: rename to return_interm_layers (backbone intermediate outputs).
+
+    def act_config_dict(self):
+        data = asdict(self)
+        data.pop("exec_horizon", None)
+        return data
 
 
 @dataclass
 class CNNMLPConfig:
     exec_horizon: Optional[int] = None
-    act_config: Dict[str, Any] = field(
-        default_factory=lambda: {
-            "backbone": "resnet18",
-            "lr_backbone": 1e-5,
-            "hidden_dim": 256,
-            "position_embedding": "sine",
-            "dilation": False,
-            "masks": False,
-        }
-    )
+    backbone: str = "resnet18"
+    lr_backbone: float = 1e-5
+    hidden_dim: int = 256
+    position_embedding: str = "sine"
+    dilation: bool = False
+    masks: bool = False
+
+    def act_config_dict(self):
+        data = asdict(self)
+        data.pop("exec_horizon", None)
+        return data
+
+
+@dataclass
+class PolicyConfig:
+    name: str = "cnnmlp"
+    act: ACTConfig = field(default_factory=ACTConfig)
+    cnnmlp: CNNMLPConfig = field(default_factory=CNNMLPConfig)
+
+
+def _coerce_act_config(value):
+    if isinstance(value, ACTConfig):
+        return value
+    if value is None:
+        return ACTConfig()
+    if isinstance(value, dict):
+        return ACTConfig(**value)
+    raise TypeError(f"unsupported ACT config type: {type(value)}")
+
+
+def _coerce_cnnmlp_config(value):
+    if isinstance(value, CNNMLPConfig):
+        return value
+    if value is None:
+        return CNNMLPConfig()
+    if isinstance(value, dict):
+        return CNNMLPConfig(**value)
+    raise TypeError(f"unsupported CNNMLP config type: {type(value)}")
 
 
 def _normalize_policy_config(cfg):
     policy_cfg = getattr(cfg, "policy", None)
     if policy_cfg is None:
-        cfg.policy = PolicyConfig()
+        policy_cfg = PolicyConfig()
     elif isinstance(policy_cfg, PolicyConfig):
-        return policy_cfg
+        policy_cfg.act = _coerce_act_config(policy_cfg.act)
+        policy_cfg.cnnmlp = _coerce_cnnmlp_config(policy_cfg.cnnmlp)
     elif isinstance(policy_cfg, str):
-        cfg.policy = PolicyConfig(name=policy_cfg)
+        policy_cfg = PolicyConfig(name=policy_cfg)
     elif isinstance(policy_cfg, dict):
-        cfg.policy = PolicyConfig(**policy_cfg)
+        policy_cfg = PolicyConfig(
+            name=policy_cfg.get("name", "cnnmlp"),
+            act=_coerce_act_config(policy_cfg.get("act")),
+            cnnmlp=_coerce_cnnmlp_config(policy_cfg.get("cnnmlp")),
+        )
     else:
         raise TypeError(f"unsupported policy config type: {type(policy_cfg)}")
+    cfg.policy = policy_cfg
     return cfg.policy
 
 
-def _get_policy_defaults(name):
-    if name == "act":
-        return asdict(ACTConfig())
-    if name == "cnnmlp":
-        return asdict(CNNMLPConfig())
-    return {}
-
-
 def apply_policy_config(cfg):
-    policy_cfg = _normalize_policy_config(cfg)
-    policy_path = getattr(policy_cfg, "config_path", None)
-    if policy_path:
-        print(
-            "[warning] policy.config_path is ignored; use dataclass defaults and CLI overrides."
-        )
-    params = {}
-    params.update(_get_policy_defaults(policy_cfg.name))
-    if policy_cfg.params:
-        params.update(policy_cfg.params)
-    policy_cfg.params = params
-
-
-def _apply_policy_overrides(cfg_obj, params):
-    if not isinstance(params, dict):
-        return cfg_obj
-    if "exec_horizon" in params and params["exec_horizon"] is not None:
-        cfg_obj.exec_horizon = params["exec_horizon"]
-    if "act_config" in params and isinstance(params["act_config"], dict):
-        cfg_obj.act_config.update(params["act_config"])
-    return cfg_obj
+    return _normalize_policy_config(cfg)
 
 
 def resolve_policy_config(cfg):
     policy_cfg = _normalize_policy_config(cfg)
     policy_name = str(getattr(policy_cfg, "name", "")).lower()
-    params = getattr(policy_cfg, "params", None) or {}
     if policy_name == "act":
-        return _apply_policy_overrides(ACTConfig(), params)
+        return policy_cfg.act
     if policy_name == "cnnmlp":
-        return _apply_policy_overrides(CNNMLPConfig(), params)
+        return policy_cfg.cnnmlp
     raise ValueError(f"unsupported policy: {policy_name}")
 
 
@@ -110,4 +109,27 @@ def get_policy_param(cfg, key, default=None):
         resolved = resolve_policy_config(cfg)
     except Exception:
         return default
+    if key == "act_config":
+        return resolved.act_config_dict()
     return getattr(resolved, key, default)
+
+
+def normalize_policy_cli_args(argv):
+    if not argv:
+        return argv
+    normalized = []
+    skip_next = False
+    for idx, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--policy" and idx + 1 < len(argv):
+            normalized.append(f"--policy.name={argv[idx + 1]}")
+            skip_next = True
+            continue
+        if arg.startswith("--policy="):
+            normalized.append(f"--policy.name={arg.split('=', 1)[1]}")
+            continue
+        normalized.append(arg)
+    argv[:] = normalized
+    return argv
