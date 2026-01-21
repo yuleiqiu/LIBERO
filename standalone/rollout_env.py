@@ -1,7 +1,6 @@
 from collections import defaultdict, deque
 from dataclasses import is_dataclass
 from pathlib import Path
-import sys
 
 import h5py
 import numpy as np
@@ -23,20 +22,18 @@ from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
 from libero.libero.utils.video_utils import VideoWriter
 
 from standalone.configs import (
-    ACTConfig,
-    CNNMLPConfig,
     DataConfig,
     PolicyConfig,
     RolloutConfig,
     apply_policy_config,
     get_policy_param,
-    normalize_policy_cli_args,
 )
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     load_obs_stats,
 )
+from standalone.dataset_utils.image_normalization import normalize_images
 from standalone.models.policy.act_policy import ACTPolicy
 
 DEFAULT_OBS_KEY_MAPPING = {
@@ -70,34 +67,6 @@ def _merge_dataclass_fields(target, source, defaults):
             setattr(target, key, value)
 
 
-def _coerce_policy(policy):
-    if isinstance(policy, PolicyConfig):
-        if isinstance(policy.act, dict):
-            policy.act = ACTConfig(**policy.act)
-        elif policy.act is None:
-            policy.act = ACTConfig()
-        if isinstance(policy.cnnmlp, dict):
-            policy.cnnmlp = CNNMLPConfig(**policy.cnnmlp)
-        elif policy.cnnmlp is None:
-            policy.cnnmlp = CNNMLPConfig()
-        return policy
-    if policy is None:
-        return PolicyConfig()
-    if isinstance(policy, str):
-        return PolicyConfig(name=policy)
-    if isinstance(policy, dict):
-        act_value = policy.get("act")
-        cnnmlp_value = policy.get("cnnmlp")
-        return PolicyConfig(
-            name=policy.get("name", "cnnmlp"),
-            act=ACTConfig(**act_value) if isinstance(act_value, dict) else ACTConfig(),
-            cnnmlp=CNNMLPConfig(**cnnmlp_value)
-            if isinstance(cnnmlp_value, dict)
-            else CNNMLPConfig(),
-        )
-    return PolicyConfig()
-
-
 def apply_ckpt_config(cfg, cfg_dict):
     if not getattr(cfg, "use_ckpt_config", True):
         return False
@@ -106,9 +75,9 @@ def apply_ckpt_config(cfg, cfg_dict):
     if isinstance(cfg_dict.get("data"), dict):
         _merge_dataclass_fields(cfg.data, cfg_dict["data"], DataConfig())
     if isinstance(cfg_dict.get("policy"), dict):
-        policy_cfg = _coerce_policy(cfg.policy)
-        _merge_dataclass_fields(policy_cfg, cfg_dict["policy"], PolicyConfig())
-        cfg.policy = policy_cfg
+        if not isinstance(cfg.policy, PolicyConfig):
+            raise TypeError(f"policy must be PolicyConfig, got {type(cfg.policy)}")
+        _merge_dataclass_fields(cfg.policy, cfg_dict["policy"], PolicyConfig())
     ckpt_rollout = cfg_dict.get("rollout") if isinstance(cfg_dict.get("rollout"), dict) else {}
     ckpt_env_horizon = ckpt_rollout.get("env_horizon")
     if ckpt_env_horizon is None:
@@ -300,27 +269,14 @@ def stack_obs_batch(obs_list, obs_keys, image_keys):
     return batch
 
 
-# def normalize_obs(obs, obs_stats):
-#     if obs_stats is None:
-#         return obs
-#     out = {}
-#     for key, value in obs.items():
-#         stats = obs_stats.get(key)
-#         if stats is None:
-#             out[key] = value
-#         else:
-#             mean = stats["mean"]
-#             std = stats["std"]
-#             out[key] = ((value - mean) / std).astype(np.float32)
-#     return out
-
-
 class ObsHistory:
-    def __init__(self, keys, horizon):
+    def __init__(self, keys, horizon, image_keys=None, image_norm="none"):
         self.horizon = int(horizon)
         if self.horizon <= 0:
             raise ValueError("obs_horizon must be >= 1")
         self._buffers = {key: deque(maxlen=self.horizon) for key in keys}
+        self._image_keys = set(image_keys or [])
+        self._image_norm = str(image_norm or "none").lower()
 
     def reset(self):
         for buf in self._buffers.values():
@@ -342,6 +298,9 @@ class ObsHistory:
                 pad = np.repeat(arr[[0]], self.horizon - arr.shape[0], axis=0)
                 arr = np.concatenate([pad, arr], axis=0)
             out[key] = arr.astype(np.float32, copy=False)
+        for key in self._image_keys:
+            if key in out:
+                out[key] = normalize_images(out[key], self._image_norm, input_scale="0_255")
         return out
 
 
@@ -487,7 +446,12 @@ def run_env_rollouts(
     if env_num == 1:
         env = OffScreenRenderEnv(**env_args)
         env.seed(cfg.data.seed)
-        history = ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon)
+        history = ObsHistory(
+            obs_keys + image_keys,
+            cfg.data.obs_horizon,
+            image_keys=image_keys,
+            image_norm=cfg.data.image_norm,
+        )
         successes = 0
         pbar = tqdm(total=n_rollouts, desc="rollout", leave=True)
 
@@ -585,7 +549,15 @@ def run_env_rollouts(
 
     env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
     env.seed(cfg.data.seed)
-    histories = [ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon) for _ in range(env_num)]
+    histories = [
+        ObsHistory(
+            obs_keys + image_keys,
+            cfg.data.obs_horizon,
+            image_keys=image_keys,
+            image_norm=cfg.data.image_norm,
+        )
+        for _ in range(env_num)
+    ]
 
     max_record_videos = min(save_videos, n_rollouts)
     record_active = [False] * env_num
@@ -817,6 +789,9 @@ def main(cfg: RolloutConfig):
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
         action_shift=getattr(cfg.data, "action_shift", 0),
+        image_keys=image_keys,
+        image_norm=cfg.data.image_norm,
+        image_transforms=None,
     )
 
     obs_stats = None
@@ -875,5 +850,4 @@ def main(cfg: RolloutConfig):
 
 
 if __name__ == "__main__":
-    normalize_policy_cli_args(sys.argv)
     main()

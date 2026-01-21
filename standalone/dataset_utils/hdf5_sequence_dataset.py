@@ -8,6 +8,8 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from standalone.dataset_utils.image_normalization import normalize_images
+
 
 class HDF5SequenceDataset(Dataset):
     def __init__(
@@ -20,6 +22,9 @@ class HDF5SequenceDataset(Dataset):
         action_key="actions",
         demos=None,
         obs_stats=None,
+        image_keys=None,
+        image_norm="none",
+        image_transforms=None,
     ):
         self.hdf5_path = str(Path(hdf5_path).expanduser().resolve())
         self.obs_keys = list(obs_keys)
@@ -32,6 +37,12 @@ class HDF5SequenceDataset(Dataset):
         self._h5 = None
         self._indices = []
         self._obs_stats = obs_stats
+        self.image_keys = set(image_keys or [])
+        self.image_norm = str(image_norm or "none").lower()
+        self._image_transforms_cfg = image_transforms
+        self._image_transform = None
+        self._image_transforms_enabled = True
+        self._init_image_transforms()
 
         with h5py.File(self.hdf5_path, "r") as f:
             demo_keys = demos or list(f["data"].keys())
@@ -51,10 +62,51 @@ class HDF5SequenceDataset(Dataset):
     def set_obs_stats(self, obs_stats):
         self._obs_stats = obs_stats
 
+    def set_image_transforms_enabled(self, enabled: bool):
+        self._image_transforms_enabled = bool(enabled)
+
+    def image_transforms_enabled(self):
+        return self._image_transforms_enabled
+
     def _get_h5(self):
         if self._h5 is None:
             self._h5 = h5py.File(self.hdf5_path, "r")
         return self._h5
+
+    def _init_image_transforms(self):
+        if not self._image_transforms_cfg or not self.image_keys:
+            return
+        if not getattr(self._image_transforms_cfg, "enable", False):
+            return
+        from standalone.dataset_utils.image_transforms import ImageTransforms
+
+        self._image_transform = ImageTransforms(self._image_transforms_cfg)
+
+    def _apply_image_transforms(self, arr):
+        if self._image_transform is None or not self._image_transforms_enabled:
+            return arr
+        if arr.ndim < 3:
+            raise ValueError(f"expected image dims >= 3, got shape {arr.shape}")
+        channel_last = arr.shape[-1] in (1, 3)
+        channel_first = arr.shape[-3] in (1, 3)
+        if not (channel_last or channel_first):
+            raise ValueError(f"cannot infer channel axis from shape {arr.shape}")
+        if channel_last:
+            arr = np.moveaxis(arr, -1, -3)
+        x = torch.from_numpy(arr).to(dtype=torch.float32) / 255.0
+        x = self._image_transform(x)
+        if torch.is_tensor(x):
+            x = x.clamp(0.0, 1.0).cpu().numpy()
+        if channel_last:
+            x = np.moveaxis(x, -3, -1)
+        return x.astype(np.float32, copy=False)
+
+    def _process_image(self, arr):
+        arr = arr.astype(np.float32, copy=False)
+        if self._image_transform is not None and self._image_transforms_enabled:
+            arr = self._apply_image_transforms(arr)
+            return normalize_images(arr, self.image_norm, input_scale="0_1")
+        return normalize_images(arr, self.image_norm, input_scale="0_255")
 
     def __getitem__(self, idx):
         demo_key, t = self._indices[idx]
@@ -68,7 +120,10 @@ class HDF5SequenceDataset(Dataset):
             if arr.shape[0] < self.obs_horizon:
                 pad = np.repeat(arr[[0]], self.obs_horizon - arr.shape[0], axis=0)
                 arr = np.concatenate([pad, arr], axis=0)
-            obs[key] = arr.astype(np.float32)
+            arr = arr.astype(np.float32, copy=False)
+            if key in self.image_keys:
+                arr = self._process_image(arr)
+            obs[key] = arr
 
         action_start = t + self.action_shift
         actions = demo_group[self.action_key][
@@ -125,19 +180,27 @@ def compute_obs_stats(dataset, indices, eps=1e-3, ignore_keys=None):
     sumsq = {}
     counts = {}
     ignore_keys = set(ignore_keys or [])
+    restore_transforms = None
+    if hasattr(dataset, "set_image_transforms_enabled"):
+        restore_transforms = dataset.image_transforms_enabled()
+        dataset.set_image_transforms_enabled(False)
 
-    for idx in tqdm(indices, desc="compute obs stats", leave=True):
-        sample = dataset[idx]
-        for key, value in sample["obs"].items():
-            if key in ignore_keys:
-                continue
-            value = value.astype(np.float32, copy=False)
-            sums.setdefault(key, 0.0)
-            sumsq.setdefault(key, 0.0)
-            counts.setdefault(key, 0)
-            sums[key] = sums[key] + value.sum(axis=0)
-            sumsq[key] = sumsq[key] + (value * value).sum(axis=0)
-            counts[key] = counts[key] + value.shape[0]
+    try:
+        for idx in tqdm(indices, desc="compute obs stats", leave=True):
+            sample = dataset[idx]
+            for key, value in sample["obs"].items():
+                if key in ignore_keys:
+                    continue
+                value = value.astype(np.float32, copy=False)
+                sums.setdefault(key, 0.0)
+                sumsq.setdefault(key, 0.0)
+                counts.setdefault(key, 0)
+                sums[key] = sums[key] + value.sum(axis=0)
+                sumsq[key] = sumsq[key] + (value * value).sum(axis=0)
+                counts[key] = counts[key] + value.shape[0]
+    finally:
+        if restore_transforms is not None:
+            dataset.set_image_transforms_enabled(restore_transforms)
 
     stats = {}
     for key in sums:

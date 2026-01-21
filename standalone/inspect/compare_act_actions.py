@@ -206,6 +206,9 @@ def main():
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
+        image_keys=image_keys,
+        image_norm=cfg.data.image_norm,
+        image_transforms=None,
     )
     sample = dataset[0]
     action_dim = sample["actions"].shape[-1]
@@ -273,7 +276,13 @@ def main():
     if args.video_out:
         envs = [OffScreenRenderEnv(**env_args) for _ in range(2)]
         histories = [
-            ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon) for _ in range(2)
+            ObsHistory(
+                obs_keys + image_keys,
+                cfg.data.obs_horizon,
+                image_keys=image_keys,
+                image_norm=cfg.data.image_norm,
+            )
+            for _ in range(2)
         ]
         dummy_action = np.zeros((action_dim,), dtype=np.float32)
         for i, init_idx in enumerate(init_idxs):
@@ -341,7 +350,12 @@ def main():
     actions = []
     for init_idx in init_idxs:
         model.reset()
-        history = ObsHistory(obs_keys + image_keys, cfg.data.obs_horizon)
+        history = ObsHistory(
+            obs_keys + image_keys,
+            cfg.data.obs_horizon,
+            image_keys=image_keys,
+            image_norm=cfg.data.image_norm,
+        )
 
         env.reset()
         env_obs = env.set_init_state(init_states[init_idx])

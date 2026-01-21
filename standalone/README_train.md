@@ -45,6 +45,8 @@ Train config fields (grouped):
 - `data.obs_keys` / `data.image_keys`: comma-separated keys from the dataset.
 - `data.obs_horizon`, `data.predict_horizon`: temporal window sizes.
 - `data.action_shift`: action offset relative to observations.
+- `data.image_norm`: image normalization (`none`, `scale_0_1`, or `imagenet`).
+- `data.image_transforms.*`: optional image augmentation settings.
 - `data.normalize_obs`, `data.obs_stats_path`: observation normalization settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
@@ -89,6 +91,7 @@ Each run directory stores:
 
 - ACT/CNNMLP ignore observation normalization; `normalize_obs` is disabled
   automatically for these policies.
+- Image normalization is applied in the dataset via `data.image_norm`.
 - `rollout.init_states_dir` defaults to the LIBERO init_states path if unset.
 - `rollout.env_horizon` defaults to 2000 for training-time rollouts.
 - If you pass a `paths.save_dir` that already ends with `run_###`, it will be used
@@ -100,6 +103,30 @@ Each run directory stores:
   and `saved_config_path` alone can be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`
   is missing, it falls back to the legacy `config.json`.
+
+## Image augmentation
+
+Image augmentation is configured under `data.image_transforms` and is applied
+only during training. Rollout/inference uses raw images, but still applies
+`data.image_norm` to keep the input distribution consistent with training.
+
+Available transforms (by `type`):
+
+- `ColorJitter` (brightness/contrast/saturation/hue)
+- `SharpnessJitter`
+- `RandomAffine`
+- `RandomCrop` (keeps original resolution when `size` is omitted)
+
+Example (enable augmentation + imagenet normalization):
+
+```bash
+python standalone/train.py \
+  --data.image_norm=imagenet \
+  --data.image_transforms.enable=true \
+  --data.image_transforms.max_num_transforms=3 \
+  --data.image_transforms.tfs.random_crop.weight=1.0 \
+  --data.image_transforms.tfs.random_crop.kwargs.padding=4
+```
 
 ## Rollout usage (rollout_env.py)
 

@@ -15,7 +15,11 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import TrainConfig, apply_policy_config, normalize_policy_cli_args
+from standalone.configs import (
+    TrainConfig,
+    apply_policy_config,
+    serialize_policy_config,
+)
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
@@ -142,14 +146,8 @@ def main(cfg: TrainConfig):
             wandb_config = asdict(cfg)
         else:
             wandb_config = getattr(cfg, "__dict__", cfg)
-        policy_cfg = getattr(cfg, "policy", None)
-        if policy_cfg is not None and isinstance(wandb_config, dict):
-            if is_dataclass(policy_cfg):
-                wandb_config["policy"] = asdict(policy_cfg)
-            elif isinstance(policy_cfg, dict):
-                wandb_config["policy"] = dict(policy_cfg)
-            else:
-                wandb_config["policy"] = getattr(policy_cfg, "__dict__", str(policy_cfg))
+        if isinstance(wandb_config, dict):
+            wandb_config["policy"] = serialize_policy_config(cfg)
         wandb.init(
             project=cfg.logging.wandb_project,
             entity=cfg.logging.wandb_entity or None,
@@ -170,7 +168,10 @@ def main(cfg: TrainConfig):
         print("[warn] ACT/CNNMLP policy ignores obs normalization; disabling normalize_obs.")
         cfg.data.normalize_obs = False
     if not cfg.resume:
-        write_run_metadata(save_dir, cfg)
+        cfg_dict = cfg_to_dict(cfg)
+        if isinstance(cfg_dict, dict):
+            cfg_dict["policy"] = serialize_policy_config(cfg)
+        write_run_metadata(save_dir, cfg, cfg_dict=cfg_dict)
 
     split_path = save_dir / "split_indices.json"
 
@@ -196,6 +197,9 @@ def main(cfg: TrainConfig):
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
         action_shift=getattr(cfg.data, "action_shift", 0),
+        image_keys=image_keys,
+        image_norm=cfg.data.image_norm,
+        image_transforms=cfg.data.image_transforms,
     )
 
     train_idx, val_idx = make_splits(
@@ -465,5 +469,4 @@ def main(cfg: TrainConfig):
 
 
 if __name__ == "__main__":
-    normalize_policy_cli_args(sys.argv)
     main()
