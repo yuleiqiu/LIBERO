@@ -92,8 +92,9 @@ def merge_config_with_overrides(saved, overrides, allowlist, defaults=None):
             _set_by_path(merged, key, override_value)
     return merged
 
-def write_run_metadata(save_dir: Path, cfg):
-    cfg_dict = cfg_to_dict(cfg)
+def write_run_metadata(save_dir: Path, cfg, cfg_dict=None):
+    if cfg_dict is None:
+        cfg_dict = cfg_to_dict(cfg)
     with open(save_dir / TRAIN_CONFIG_NAME, "w") as f:
         json.dump(cfg_dict, f, indent=2)
     cmd = " ".join(shlex.quote(arg) for arg in sys.argv)
