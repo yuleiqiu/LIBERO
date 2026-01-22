@@ -56,7 +56,8 @@ Train config fields (grouped):
 - `resume`, `saved_config_path`: resume from an existing run config (JSON).
 - `paths.save_dir`: base directory for run outputs (see below).
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
-- `training.val_every`, `training.grad_clip`, `training.device`: eval cadence, grad clip, device.
+- `training.val_every`, `training.grad_clip`, `training.device`: validation cadence, grad clip, device.
+- `training.ckpt_mode`: checkpoint saving policy (`last`, `best`, or `all`).
 - `rollout.every`: training-time rollout interval (0 disables rollouts).
 - `rollout.init_states_dir`: init states root (falls back to LIBERO default if unset).
 - `rollout.env_horizon`: environment horizon used during training rollouts.
@@ -83,17 +84,25 @@ Each run directory stores:
 - `command.txt`: the exact CLI used to launch the run
 - `run_meta.json`: metadata like `started_at`
 - `split_indices.json`: train/val split indices
-- `model_last.pt`: latest checkpoint
+- `model_last.pt`: latest checkpoint when `training.ckpt_mode=last`
+- `model_best.pt`: best rollout checkpoint when `training.ckpt_mode=best`
+- `model_epoch_###.pt`: per-epoch checkpoints when `training.ckpt_mode=all`
 - `obs_stats.json`: only when `data.normalize_obs` is enabled
-- `rollout_videos/`: only when rollouts are enabled
+- `rollout_videos/`: only when rollouts are enabled (training uses `val/epoch_###`,
+  post-training defaults to `eval/`)
 
 ## Notes
 
 - ACT/CNNMLP ignore observation normalization; `normalize_obs` is disabled
   automatically for these policies.
 - Image normalization is applied in the dataset via `data.image_norm`.
+- Validation loss is logged every `training.val_every` epochs; only the loss is tracked
+  (no best-val selection or extra val stats). `split_indices.json` still records the
+  train/val split from `data.train_ratio`/`data.val_ratio`.
 - `rollout.init_states_dir` defaults to the LIBERO init_states path if unset.
 - `rollout.env_horizon` defaults to 2000 for training-time rollouts.
+- `training.ckpt_mode=best` saves `model_best.pt` based on rollout success rate and
+  requires rollouts to run; `all` saves `model_epoch_###.pt` each epoch.
 - If you pass a `paths.save_dir` that already ends with `run_###`, it will be used
   as-is (no auto-increment).
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
@@ -146,6 +155,8 @@ python standalone/rollout_env.py \
 Notes:
 
 - `ckpt` must point to the actual `run_###/model_last.pt` you want to evaluate.
+- If `training.ckpt_mode` is `best` or `all`, use `model_best.pt` or
+  `model_epoch_###.pt` instead of `model_last.pt`.
 - When `use_ckpt_config: true` (default), `data.*` and `policy.*` are filled
   from `train_config.json` in the checkpoint directory. Old checkpoints without
   this file still need explicit `data`/`policy` fields.
@@ -154,7 +165,7 @@ Notes:
   `use_ckpt_config: true`, you can omit `env_horizon` to fall back to the
   checkpoint's `rollout.env_horizon` if present.
 - `video_dir` is optional; if omitted, videos go under the checkpoint folder
-  at `rollout_videos/`.
+  at `rollout_videos/eval/`.
 
 Rollout config fields:
 

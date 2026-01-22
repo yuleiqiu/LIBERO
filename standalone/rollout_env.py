@@ -319,11 +319,38 @@ def select_video_camera(cfg, image_keys, obs_key_mapping):
     return obs_key_mapping.get(first_key, first_key)
 
 
+def _derive_eval_video_dir(cfg, run_config):
+    if isinstance(run_config, dict):
+        rollout_cfg = run_config.get("rollout")
+        if isinstance(rollout_cfg, dict):
+            train_video_dir = rollout_cfg.get("video_dir")
+            if train_video_dir:
+                try:
+                    base_dir = Path(train_video_dir).expanduser().resolve().parent
+                    return base_dir / "eval"
+                except Exception:
+                    pass
+        paths_cfg = run_config.get("paths")
+        if isinstance(paths_cfg, dict):
+            save_dir = paths_cfg.get("save_dir")
+            if save_dir:
+                try:
+                    base_dir = Path(save_dir).expanduser().resolve()
+                    return base_dir / "rollout_videos" / "eval"
+                except Exception:
+                    pass
+    ckpt_path = getattr(cfg, "ckpt", "")
+    if ckpt_path:
+        ckpt_dir = Path(ckpt_path).expanduser().resolve().parent
+        return ckpt_dir / "rollout_videos" / "eval"
+    return None
+
+
 def resolve_video_dir(cfg):
     if getattr(cfg, "video_dir", ""):
         return Path(cfg.video_dir).expanduser().resolve()
     ckpt_dir = Path(cfg.ckpt).expanduser().resolve().parent
-    return ckpt_dir / "rollout_videos"
+    return ckpt_dir / "rollout_videos" / "eval"
 
 
 def run_env_rollouts(
@@ -768,6 +795,10 @@ def main(cfg: RolloutConfig):
         run_config = ckpt["config"]
     if run_config is not None and apply_ckpt_config(cfg, run_config):
         print("[info] using config from checkpoint")
+    if not getattr(cfg, "video_dir", ""):
+        derived_dir = _derive_eval_video_dir(cfg, run_config)
+        if derived_dir is not None:
+            cfg.video_dir = str(derived_dir)
 
     apply_policy_config(cfg)
     if not cfg.data.demo_file:

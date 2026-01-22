@@ -178,10 +178,13 @@ def main(cfg: TrainConfig):
     device = cfg.training.device if torch.cuda.is_available() else "cpu"
     val_every = int(cfg.training.val_every)
     rollout_every = int(cfg.rollout.every)
+    ckpt_mode = str(getattr(cfg.training, "ckpt_mode", "last")).lower()
     if val_every < 0:
         raise ValueError("val_every must be >= 0")
     if rollout_every < 0:
         raise ValueError("rollout_every must be >= 0")
+    if ckpt_mode not in ("last", "best", "all"):
+        raise ValueError("training.ckpt_mode must be one of: last, best, all")
     if cfg.rollout.steps <= 0:
         raise ValueError("rollout_steps must be >= 1")
     if cfg.rollout.warmup_steps < 0:
@@ -253,7 +256,6 @@ def main(cfg: TrainConfig):
             num_workers=0,
             pin_memory=torch.cuda.is_available(),
         )
-
     sample = base_dataset[train_idx[0]]
     action_dim = sample["actions"].shape[-1]
     # print(f"[debug] action_dim: {action_dim}")
@@ -296,7 +298,20 @@ def main(cfg: TrainConfig):
     else:
         rollout_runner = None
 
-    best_val = None
+    if ckpt_mode == "best":
+        if rollout_every <= 0 or rollout_runner is None:
+            raise ValueError("training.ckpt_mode=best requires rollout.every > 0")
+        if cfg.training.epochs < rollout_every:
+            raise ValueError(
+                "training.ckpt_mode=best requires at least one rollout; "
+                "increase epochs or reduce rollout.every"
+            )
+
+    best_rollout = None
+    best_rollout_epoch = None
+    last_ckpt_path = save_dir / "model_last.pt"
+    best_ckpt_path = save_dir / "model_best.pt"
+    final_ckpt_path = None
     printed_batch = False
     for epoch in range(1, cfg.training.epochs + 1):
         model.train()
@@ -359,14 +374,10 @@ def main(cfg: TrainConfig):
             else {}
         )
         avg_val = None
-        avg_val_stats = {}
-
         do_val = val_loader is not None and val_every > 0 and epoch % val_every == 0
         if do_val:
             model.eval()
             val_losses = []
-            val_stats = {}
-            val_stat_count = 0
             with torch.no_grad():
                 for batch in val_loader:
                     for key in batch["obs"]:
@@ -374,29 +385,17 @@ def main(cfg: TrainConfig):
                     batch["actions"] = batch["actions"].to(device)
                     if "action_mask" in batch:
                         batch["action_mask"] = batch["action_mask"].to(device)
-                    if wandb is not None:
-                        loss, stats = model.compute_loss(batch, return_stats=True)
-                    else:
-                        loss = model.compute_loss(batch)
-                        stats = None
+                    loss = model.compute_loss(batch)
                     val_losses.append(loss.item())
-                    if stats:
-                        for key, value in stats.items():
-                            val_stats[key] = val_stats.get(key, 0.0) + float(value)
-                        val_stat_count += 1
             avg_val = sum(val_losses) / max(len(val_losses), 1)
             print(f"[info] epoch {epoch:03d} | val loss {avg_val:.6f}")
-            if best_val is None or avg_val < best_val:
-                best_val = avg_val
-            if val_stat_count:
-                avg_val_stats = {k: v / val_stat_count for k, v in val_stats.items()}
-
+        rollout_success = None
         if rollout_runner is not None and epoch % rollout_every == 0:
             rng = np.random.default_rng(cfg.data.seed + epoch)
             rollout_indices = sample_per_anchor(
                 rollout_state["anchor_map"], cfg.rollout.per_anchor, rng
             )
-            video_dir = save_dir / "rollout_videos" / f"epoch_{epoch:03d}"
+            video_dir = save_dir / "rollout_videos" / "val" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
                 steps=int(cfg.rollout.steps),
@@ -424,6 +423,22 @@ def main(cfg: TrainConfig):
                 rollout_order_override=rollout_indices,
                 anchor_ids=rollout_state["anchor_indices"],
             )
+            if rollout_details is not None:
+                rollout_success = rollout_details.get("success_rate")
+            if ckpt_mode == "best" and rollout_success is not None:
+                rollout_success = float(rollout_success)
+                if best_rollout is None or rollout_success > best_rollout:
+                    best_rollout = rollout_success
+                    best_rollout_epoch = epoch
+                    torch.save(
+                        {"model": model.state_dict(), "obs_stats": obs_stats},
+                        best_ckpt_path,
+                    )
+                    final_ckpt_path = best_ckpt_path
+                    print(
+                        f"[info] saved best ckpt (success_rate={best_rollout:.3f}) "
+                        f"to {best_ckpt_path}"
+                    )
             if wandb is not None and rollout_details is not None:
                 anchor_counts = defaultdict(int)
                 anchor_success = defaultdict(int)
@@ -453,18 +468,35 @@ def main(cfg: TrainConfig):
                 log_data[f"train/{key}"] = value
             if avg_val is not None:
                 log_data["val/loss"] = avg_val
-            for key, value in avg_val_stats.items():
-                log_data[f"val/{key}"] = value
             wandb.log(log_data, step=epoch)
 
-        ckpt_path = save_dir / "model_last.pt"
-        torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, ckpt_path)
+        if ckpt_mode == "all":
+            ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
+            torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, ckpt_path)
+            final_ckpt_path = ckpt_path
+        elif ckpt_mode == "last":
+            torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, last_ckpt_path)
+            final_ckpt_path = last_ckpt_path
 
-    print(f"[info] finished training. ckpt saved to {ckpt_path}")
+    if ckpt_mode == "best" and best_rollout is None:
+        print(
+            "[warning] no rollout success_rate observed; "
+            "saving final model as model_best.pt"
+        )
+        torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, best_ckpt_path)
+        final_ckpt_path = best_ckpt_path
+
+    if final_ckpt_path is not None:
+        print(f"[info] finished training. ckpt saved to {final_ckpt_path}")
+    else:
+        print("[info] finished training. no checkpoint saved")
     if wandb is not None:
-        if best_val is not None:
-            wandb.run.summary["best_val_loss"] = best_val
-        wandb.run.summary["ckpt_path"] = str(ckpt_path)
+        if best_rollout is not None:
+            wandb.run.summary["best_rollout_success"] = best_rollout
+            if best_rollout_epoch is not None:
+                wandb.run.summary["best_rollout_epoch"] = best_rollout_epoch
+        if final_ckpt_path is not None:
+            wandb.run.summary["ckpt_path"] = str(final_ckpt_path)
         wandb.finish()
 
 
