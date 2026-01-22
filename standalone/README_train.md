@@ -166,6 +166,9 @@ Notes:
   checkpoint's `rollout.env_horizon` if present.
 - `video_dir` is optional; if omitted, videos go under the checkpoint folder
   at `rollout_videos/eval/`.
+- A `rollout_summary.json` file is written under `video_dir` (default path is
+  used even when `save_videos=0`) with total success stats and per-anchor
+  success rates when anchor metadata is available.
 
 Rollout config fields:
 

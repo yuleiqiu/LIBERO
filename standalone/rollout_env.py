@@ -319,6 +319,49 @@ def select_video_camera(cfg, image_keys, obs_key_mapping):
     return obs_key_mapping.get(first_key, first_key)
 
 
+def build_rollout_summary(n_rollouts, successes, episode_results):
+    sr = successes / max(n_rollouts, 1)
+    summary = {
+        "total": {
+            "success": int(successes),
+            "rollouts": int(n_rollouts),
+            "success_rate": float(sr),
+        }
+    }
+    anchor_counts = defaultdict(int)
+    anchor_success = defaultdict(int)
+    for result in episode_results:
+        anchor_id = result.get("anchor_id")
+        if anchor_id is None:
+            continue
+        anchor_counts[int(anchor_id)] += 1
+        if result.get("success"):
+            anchor_success[int(anchor_id)] += 1
+    if anchor_counts:
+        anchors = {}
+        for anchor_id in sorted(anchor_counts.keys()):
+            count = anchor_counts[anchor_id]
+            succ = anchor_success.get(anchor_id, 0)
+            anchors[str(anchor_id)] = {
+                "success": int(succ),
+                "rollouts": int(count),
+                "success_rate": float(succ / max(count, 1)),
+            }
+        summary["anchors"] = anchors
+    return summary
+
+
+def write_rollout_summary(video_dir, summary):
+    if video_dir is None:
+        return None
+    out_dir = Path(video_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "rollout_summary.json"
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    return out_path
+
+
 def _derive_eval_video_dir(cfg, run_config):
     if isinstance(run_config, dict):
         rollout_cfg = run_config.get("rollout")
@@ -407,16 +450,15 @@ def run_env_rollouts(
     else:
         env_args["use_camera_obs"] = False
 
+    video_dir = resolve_video_dir(cfg)
     save_videos = int(getattr(cfg, "save_videos", 0))
     video_writer = None
     video_camera = None
-    video_dir = None
     if save_videos > 0:
         video_camera = select_video_camera(cfg, image_keys, obs_key_mapping)
         if not video_camera:
             print("[warning] save_videos requested but no image_keys; skipping video")
         else:
-            video_dir = resolve_video_dir(cfg)
             video_writer = VideoWriter(
                 video_path=str(video_dir),
                 save_video=True,
@@ -565,6 +607,8 @@ def run_env_rollouts(
         print("[info] rollout summary:")
         print(f"  rollouts: {n_rollouts}")
         print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
+        summary = build_rollout_summary(n_rollouts, successes, episode_results)
+        summary_path = write_rollout_summary(video_dir, summary)
         return {
             "n_rollouts": n_rollouts,
             "successes": successes,
@@ -572,6 +616,7 @@ def run_env_rollouts(
             "rollout_order": rollout_order,
             "episode_results": episode_results,
             "video_dir": str(video_dir) if video_dir is not None else None,
+            "summary_path": str(summary_path) if summary_path is not None else None,
         }
 
     env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
@@ -769,6 +814,8 @@ def run_env_rollouts(
     print(f"  rollouts: {n_rollouts}")
     print(f"  envs: {env_num} (use_mp={use_mp})")
     print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
+    summary = build_rollout_summary(n_rollouts, successes, episode_results)
+    summary_path = write_rollout_summary(video_dir, summary)
     return {
         "n_rollouts": n_rollouts,
         "successes": successes,
@@ -776,6 +823,7 @@ def run_env_rollouts(
         "rollout_order": rollout_order,
         "episode_results": episode_results,
         "video_dir": str(video_dir) if video_dir is not None else None,
+        "summary_path": str(summary_path) if summary_path is not None else None,
     }
 
 
@@ -868,6 +916,7 @@ def main(cfg: RolloutConfig):
     model.to(device)
     model.reset()
 
+    anchor_ids = load_anchor_indices(cfg)
     run_env_rollouts(
         cfg,
         model,
@@ -877,6 +926,7 @@ def main(cfg: RolloutConfig):
         demo_path,
         action_dim,
         image_shapes,
+        anchor_ids=anchor_ids,
     )
 
 
