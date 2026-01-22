@@ -1,4 +1,11 @@
 from standalone.configs.data import DataConfig, ImageTransformConfig, ImageTransformsConfig
+from standalone.configs.encoder import (
+    CropRandomizerConfig,
+    ImageEncoderConfig,
+    LowdimEncoderConfig,
+    ObsEncoderFusionConfig,
+    ObsEncoderConfig,
+)
 from standalone.configs.policy import (
     ACTConfig,
     CNNMLPConfig,
@@ -21,6 +28,11 @@ __all__ = [
     "DataConfig",
     "ImageTransformConfig",
     "ImageTransformsConfig",
+    "CropRandomizerConfig",
+    "ImageEncoderConfig",
+    "LowdimEncoderConfig",
+    "ObsEncoderFusionConfig",
+    "ObsEncoderConfig",
     "PolicyConfig",
     "ACTConfig",
     "CNNMLPConfig",
