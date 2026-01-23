@@ -58,3 +58,88 @@ Explicit rule:
 3) Add/extend configs in `configs/` and update `policy_factory`.  
 4) Keep image augmentation in `dataset_utils/`; keep algorithm normalization in
    the policy or algorithm core (not both).
+
+## Example Commands (ACT)
+
+```bash
+python standalone/train.py \
+  --policy.name=act \
+  --policy.act.dim_feedforward=3200 \
+  --policy.act.hidden_dim=512 \
+  --data.image_norm=imagenet \
+  --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --data.predict_horizon=100 \
+  --paths.save_dir=standalone/standalone_runs/train_act \
+  --training.batch_size=128 \
+  --training.epochs=100 \
+  --training.ckpt_mode=all \
+  --rollout.init_states_dir=./libero/libero/init_files \
+  --rollout.warmup_steps=10 \
+  --rollout.use_mp=true \
+  --rollout.num_procs=9 \
+  --rollout.steps=1500 \
+  --logging.use_wandb=true \
+  --logging.wandb_project=libero-standalone \
+  --logging.experiment_name=act_single_noeef
+```
+
+```bash
+python standalone/train.py \
+  --policy.name=act \
+  --policy.act.dim_feedforward=3200 \
+  --policy.act.hidden_dim=512 \
+  --data.image_norm=imagenet \
+  --data.demo_file=./libero/datasets/libero_object_multi/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --data.predict_horizon=100 \
+  --paths.save_dir=standalone/standalone_runs/train_act \
+  --training.batch_size=128 \
+  --training.epochs=100 \
+  --rollout.init_states_dir=./libero/libero/init_files \
+  --rollout.warmup_steps=10 \
+  --rollout.use_mp=true \
+  --rollout.num_procs=9 \
+  --rollout.steps=1500 \
+  --logging.use_wandb=true \
+  --logging.wandb_project=libero-standalone \
+  --logging.experiment_name=act_multi_noeef
+```
+
+```bash
+python standalone/rollout_env.py \
+  --ckpt=standalone/standalone_runs/train_act/act_single_noeef/model_last.pt \
+  --init_states=libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.pruned_init \
+  --steps=1500 \
+  --warmup_steps=10 \
+  --n_rollouts=90 \
+  --use_mp=true \
+  --num_procs=9 \
+  --save_videos 90
+```
+
+```bash
+python standalone/rollout_env.py \
+  --ckpt=standalone/standalone_runs/train_act/run_002/model_last.pt \
+  --data.demo_file=libero/datasets/libero_object_multi/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --init_states=libero/libero/init_files/libero_object_multi/pick_up_the_alphabet_soup_and_place_it_in_the_basket.pruned_init \
+  --steps=1500 \
+  --warmup_steps=10 \
+  --n_rollouts=90 \
+  --use_mp=true \
+  --num_procs=9 \
+  --save_videos 90 \
+  --video_dir=standalone/standalone_runs/train_act/run_002/eval_multi
+```
+
+```bash
+python standalone/rollout_env.py \
+  --ckpt=standalone/standalone_runs/train_act/run_003/model_last.pt \
+  --data.demo_file=libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --init_states=libero/libero/init_files/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket.pruned_init \
+  --steps=1500 \
+  --warmup_steps=10 \
+  --n_rollouts=90 \
+  --use_mp=true \
+  --num_procs=9 \
+  --save_videos 90 \
+  --video_dir=standalone/standalone_runs/train_act/run_003/eval_single
+```

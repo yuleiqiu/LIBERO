@@ -6,9 +6,12 @@ from standalone.configs.encoder import (
     ObsEncoderFusionConfig,
     ObsEncoderConfig,
 )
+from standalone.configs.normalizer import NormalizerConfig
 from standalone.configs.policy import (
     ACTConfig,
     CNNMLPConfig,
+    DiffusionConfig,
+    DiffusionModelConfig,
     PolicyConfig,
     apply_policy_config,
     get_policy_param,
@@ -33,9 +36,12 @@ __all__ = [
     "LowdimEncoderConfig",
     "ObsEncoderFusionConfig",
     "ObsEncoderConfig",
+    "NormalizerConfig",
     "PolicyConfig",
     "ACTConfig",
     "CNNMLPConfig",
+    "DiffusionConfig",
+    "DiffusionModelConfig",
     "PathsConfig",
     "TrainLoopConfig",
     "TrainRolloutConfig",

@@ -5,12 +5,12 @@ import torch.nn.functional as F
 from einops import reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-from ..model.common.normalizer import LinearNormalizer
+from ..utils.normalizer import LinearNormalizer
 from ..model.diffusion.conditional_unet1d import ConditionalUnet1D
-from ..common.pytorch_util import dict_apply
+from ..utils.pytorch_util import dict_apply
 
 
-class DiffusionUnetCore(nn.Module):
+class DiffusionModel(nn.Module):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
@@ -19,7 +19,6 @@ class DiffusionUnetCore(nn.Module):
             n_obs_steps,
             obs_encoder=None,
             num_inference_steps=None,
-            obs_as_global_cond=True,
             diffusion_step_embed_dim=256,
             down_dims=(256,512,1024),
             kernel_size=5,
@@ -42,15 +41,11 @@ class DiffusionUnetCore(nn.Module):
             obs_feature_dim = obs_encoder.output_shape()[0]
         if obs_feature_dim is None:
             raise ValueError("obs_encoder must define output_dim or output_shape()")
-        input_dim = action_dim + obs_feature_dim
-        global_cond_dim = None
-        if obs_as_global_cond:
-            input_dim = action_dim
-            global_cond_dim = obs_feature_dim * n_obs_steps
+        input_dim = action_dim
+        global_cond_dim = obs_feature_dim * n_obs_steps
 
         model = ConditionalUnet1D(
             input_dim=input_dim,
-            local_cond_dim=None,
             global_cond_dim=global_cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
             down_dims=down_dims,
@@ -68,7 +63,6 @@ class DiffusionUnetCore(nn.Module):
         self.action_dim = action_dim
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
-        self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
 
         if num_inference_steps is None:
@@ -80,8 +74,8 @@ class DiffusionUnetCore(nn.Module):
     
     # ========= inference  ============
     def conditional_sample(self, 
-            condition_data, condition_mask,
-            local_cond=None, global_cond=None,
+            shape,
+            global_cond=None,
             generator=None,
             # keyword arguments to scheduler.step
             **kwargs
@@ -89,32 +83,27 @@ class DiffusionUnetCore(nn.Module):
         model = self.model
         scheduler = self.noise_scheduler
 
+        device = global_cond.device if global_cond is not None else self.device
+        dtype = global_cond.dtype if global_cond is not None else self.dtype
         trajectory = torch.randn(
-            size=condition_data.shape, 
-            dtype=condition_data.dtype,
-            device=condition_data.device,
+            size=shape, 
+            dtype=dtype,
+            device=device,
             generator=generator)
     
         # set step values
         scheduler.set_timesteps(self.num_inference_steps)
 
         for t in scheduler.timesteps:
-            # 1. apply conditioning
-            trajectory[condition_mask] = condition_data[condition_mask]
+            # 1. predict model output
+            model_output = model(trajectory, t, global_cond=global_cond)
 
-            # 2. predict model output
-            model_output = model(trajectory, t, 
-                local_cond=local_cond, global_cond=global_cond)
-
-            # 3. compute previous image: x_t -> x_t-1
+            # 2. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(
                 model_output, t, trajectory, 
                 generator=generator,
                 **kwargs
                 ).prev_sample
-        
-        # finally make sure conditioning is enforced
-        trajectory[condition_mask] = condition_data[condition_mask]        
 
         return trajectory
 
@@ -131,41 +120,18 @@ class DiffusionUnetCore(nn.Module):
         B, To = value.shape[:2]
         T = self.horizon
         Da = self.action_dim
-        Do = self.obs_feature_dim
         To = self.n_obs_steps
 
-        # build input
-        device = self.device
-        dtype = self.dtype
-
         # handle different ways of passing observation
-        local_cond = None
-        global_cond = None
-        if self.obs_as_global_cond:
-            # condition through global feature
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(B, -1)
-            # empty data for action
-            cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
-            cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-        else:
-            # condition through impainting
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, To, Do
-            nobs_features = nobs_features.reshape(B, To, -1)
-            cond_data = torch.zeros(size=(B, T, Da+Do), device=device, dtype=dtype)
-            cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-            cond_data[:,:To,Da:] = nobs_features
-            cond_mask[:,:To,Da:] = True
+        # condition through global feature
+        this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+        nobs_features = self.obs_encoder(this_nobs)
+        # reshape back to B, Do
+        global_cond = nobs_features.reshape(B, -1)
 
         # run sampling
         nsample = self.conditional_sample(
-            cond_data, 
-            cond_mask,
-            local_cond=local_cond,
+            (B, T, Da),
             global_cond=global_cond,
             **self.kwargs)
         
@@ -186,7 +152,7 @@ class DiffusionUnetCore(nn.Module):
 
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
-        self.normalizer.load_state_dict(normalizer.state_dict())
+        self.normalizer = normalizer
 
     @property
     def device(self):
@@ -205,30 +171,13 @@ class DiffusionUnetCore(nn.Module):
         horizon = nactions.shape[1]
 
         # handle different ways of passing observation
-        local_cond = None
-        global_cond = None
         trajectory = nactions
-        cond_data = trajectory
-        if self.obs_as_global_cond:
-            # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, 
-                lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
-        else:
-            # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, T, Do
-            nobs_features = nobs_features.reshape(batch_size, horizon, -1)
-            cond_data = torch.cat([nactions, nobs_features], dim=-1)
-            trajectory = cond_data.detach()
-
-        # generate conditioning mask (obs-only for inpainting mode)
-        condition_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-        if not self.obs_as_global_cond:
-            condition_mask[:, : self.n_obs_steps, self.action_dim :] = True
+        # reshape B, T, ... to B*T
+        this_nobs = dict_apply(nobs, 
+            lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
+        nobs_features = self.obs_encoder(this_nobs)
+        # reshape back to B, Do
+        global_cond = nobs_features.reshape(batch_size, -1)
 
         # Sample noise that we'll add to the images
         noise = torch.randn(trajectory.shape, device=trajectory.device)
@@ -243,15 +192,8 @@ class DiffusionUnetCore(nn.Module):
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
         
-        # compute loss mask
-        loss_mask = ~condition_mask
-
-        # apply conditioning
-        noisy_trajectory[condition_mask] = cond_data[condition_mask]
-        
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, 
-            local_cond=local_cond, global_cond=global_cond)
+        pred = self.model(noisy_trajectory, timesteps, global_cond=global_cond)
 
         pred_type = self.noise_scheduler.config.prediction_type 
         if pred_type == 'epsilon':
@@ -262,7 +204,6 @@ class DiffusionUnetCore(nn.Module):
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
         loss = F.mse_loss(pred, target, reduction='none')
-        loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
         return loss

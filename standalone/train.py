@@ -26,6 +26,11 @@ from standalone.dataset_utils.hdf5_sequence_dataset import (
     load_obs_stats,
     save_obs_stats,
 )
+from standalone.dataset_utils.normalizer_utils import (
+    build_identity_normalizer,
+    build_linear_normalizer,
+    compute_linear_stats,
+)
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
 from standalone.utils.train_utils import (
     TRAIN_CONFIG_NAME,
@@ -164,8 +169,8 @@ def main(cfg: TrainConfig):
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     all_keys = obs_keys + image_keys
     policy_name = get_policy_name(cfg)
-    if policy_name in ("act", "cnnmlp") and cfg.data.normalize_obs:
-        print("[warn] ACT/CNNMLP policy ignores obs normalization; disabling normalize_obs.")
+    if policy_name in ("act", "cnnmlp", "dp") and cfg.data.normalize_obs:
+        print("[warn] ACT/CNNMLP/DP policy ignores obs normalization; disabling normalize_obs.")
         cfg.data.normalize_obs = False
     if not cfg.resume:
         cfg_dict = cfg_to_dict(cfg)
@@ -262,13 +267,76 @@ def main(cfg: TrainConfig):
     qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
     # print(f"[debug] qpos_dim: {qpos_dim}")
     image_shapes = {}
-    for key in image_keys:
-        if key not in sample["obs"]:
-            raise KeyError(f"image key not found in obs: {key}")
-        image_shapes[key] = sample["obs"][key].shape[1:]
-    model = build_policy(cfg, obs_keys, image_keys, action_dim, qpos_dim)
+    obs_shapes = {}
+    for key, value in sample["obs"].items():
+        obs_shapes[key] = value.shape
+        if key in image_keys:
+            image_shapes[key] = value.shape[1:]
+    dp_normalizer = None
+    ckpt_extra = {}
+    if policy_name == "dp":
+        normalizer_cfg = cfg.policy.dp.normalizer
+        identity_normalizer = build_identity_normalizer(
+            obs_shapes=obs_shapes,
+            obs_keys=list(obs_shapes.keys()),
+            action_dim=action_dim,
+            last_n_dims=normalizer_cfg.last_n_dims,
+            include_actions=True,
+        )
+        if not normalizer_cfg.enable:
+            dp_normalizer = identity_normalizer
+        else:
+            lowdim_keys = [k for k in obs_keys if k not in image_keys]
+            obs_keys_for_norm = lowdim_keys if normalizer_cfg.normalize_obs else []
+            include_actions = bool(normalizer_cfg.normalize_actions)
+            stats = {}
+            if obs_keys_for_norm or include_actions:
+                stats = compute_linear_stats(
+                    base_dataset,
+                    train_idx,
+                    obs_keys_for_norm,
+                    image_keys=image_keys,
+                    last_n_dims=normalizer_cfg.last_n_dims,
+                    include_actions=include_actions,
+                )
+            if stats:
+                dp_normalizer = build_linear_normalizer(
+                    stats,
+                    mode=normalizer_cfg.mode,
+                    output_min=normalizer_cfg.output_min,
+                    output_max=normalizer_cfg.output_max,
+                    range_eps=normalizer_cfg.range_eps,
+                    fit_offset=normalizer_cfg.fit_offset,
+                )
+                for key in identity_normalizer.fields:
+                    if key not in dp_normalizer.fields:
+                        dp_normalizer[key] = identity_normalizer[key]
+            else:
+                dp_normalizer = identity_normalizer
+        ckpt_extra["normalizer"] = dp_normalizer.state_dict()
+    model = build_policy(
+        cfg,
+        obs_keys,
+        image_keys,
+        action_dim,
+        qpos_dim=qpos_dim,
+        obs_shapes=obs_shapes,
+    )
+    if policy_name == "dp":
+        if dp_normalizer is None:
+            raise ValueError("dp normalizer is required but was not initialized")
+        model.set_normalizer(dp_normalizer)
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.lr)
+    def _model_state_for_ckpt():
+        state = model.state_dict()
+        if policy_name == "dp":
+            state = {
+                key: value
+                for key, value in state.items()
+                if not key.startswith("diffusion_model.normalizer.")
+            }
+        return state
 
     rollout_state = None
     if rollout_every > 0:
@@ -431,7 +499,7 @@ def main(cfg: TrainConfig):
                     best_rollout = rollout_success
                     best_rollout_epoch = epoch
                     torch.save(
-                        {"model": model.state_dict(), "obs_stats": obs_stats},
+                        {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
                         best_ckpt_path,
                     )
                     final_ckpt_path = best_ckpt_path
@@ -472,10 +540,16 @@ def main(cfg: TrainConfig):
 
         if ckpt_mode == "all":
             ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
-            torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, ckpt_path)
+            torch.save(
+                {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                ckpt_path,
+            )
             final_ckpt_path = ckpt_path
         elif ckpt_mode == "last":
-            torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, last_ckpt_path)
+            torch.save(
+                {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                last_ckpt_path,
+            )
             final_ckpt_path = last_ckpt_path
 
     if ckpt_mode == "best" and best_rollout is None:
@@ -483,7 +557,10 @@ def main(cfg: TrainConfig):
             "[warning] no rollout success_rate observed; "
             "saving final model as model_best.pt"
         )
-        torch.save({"model": model.state_dict(), "obs_stats": obs_stats}, best_ckpt_path)
+        torch.save(
+            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+            best_ckpt_path,
+        )
         final_ckpt_path = best_ckpt_path
 
     if final_ckpt_path is not None:

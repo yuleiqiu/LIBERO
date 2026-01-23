@@ -1,8 +1,8 @@
 import torch
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-from standalone.models.algos.dp.core.diffusion_unet_core import DiffusionUnetCore
-from standalone.models.algos.dp.model.common.normalizer import LinearNormalizer
+from standalone.models.algos.dp.core.diffusion_model import DiffusionModel
+from standalone.models.algos.dp.utils.normalizer import LinearNormalizer
 from standalone.models.encoders.obs import build_obs_encoder
 from standalone.models.policy.base import ChunkPolicy
 
@@ -40,9 +40,6 @@ class DiffusionPolicy(ChunkPolicy):
             )
 
         cfg = dict(dp_config or {})
-        cfg.pop("crop_shape", None)
-        cfg.pop("obs_encoder_group_norm", None)
-        cfg.pop("eval_fixed_crop", None)
         horizon = int(cfg.pop("horizon", self.obs_horizon + self.predict_horizon - 1))
         n_action_steps = int(cfg.pop("n_action_steps", self.predict_horizon))
         n_obs_steps = int(cfg.pop("n_obs_steps", self.obs_horizon))
@@ -51,7 +48,7 @@ class DiffusionPolicy(ChunkPolicy):
             scheduler_kwargs = dict(cfg.pop("noise_scheduler", {}))
             noise_scheduler = DDPMScheduler(**scheduler_kwargs)
 
-        self.dp_policy = DiffusionUnetCore(
+        self.diffusion_model = DiffusionModel(
             shape_meta=shape_meta,
             noise_scheduler=noise_scheduler,
             horizon=horizon,
@@ -85,14 +82,14 @@ class DiffusionPolicy(ChunkPolicy):
         return cleaned
 
     def set_normalizer(self, normalizer: LinearNormalizer):
-        self.dp_policy.set_normalizer(normalizer)
+        self.diffusion_model.set_normalizer(normalizer)
 
     def forward(self, obs):
         if not isinstance(obs, dict):
             raise TypeError("DiffusionPolicy expects a dict of observations")
         device = next(self.parameters()).device
         obs = self._prepare_obs(obs, device, batched=True)
-        result = self.dp_policy.predict_action(obs)
+        result = self.diffusion_model.predict_action(obs)
         actions = result["action"]
         if actions.ndim == 2:
             actions = actions.unsqueeze(1)
@@ -108,7 +105,7 @@ class DiffusionPolicy(ChunkPolicy):
         if not torch.is_tensor(actions):
             actions = torch.as_tensor(actions)
         actions = actions.to(device=device, dtype=torch.float32)
-        loss = self.dp_policy.compute_loss({"obs": obs, "action": actions})
+        loss = self.diffusion_model.compute_loss({"obs": obs, "action": actions})
         if reduction == "sum":
             loss = loss * actions.shape[0]
         if not return_stats:
