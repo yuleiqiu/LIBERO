@@ -6,42 +6,99 @@ from standalone.configs.normalizer import NormalizerConfig
 
 
 @dataclass
+class ACTModelConfig:
+    """ACT model config.
+
+    Attributes:
+        backbone: ResNet backbone name.
+        pretrained: Load torchvision pretrained weights for the backbone.
+        dilation: Replace last strides with dilation in the backbone.
+        position_embedding: Position embedding type (e.g., "sine").
+        enc_layers: Transformer encoder layer count.
+        dec_layers: Transformer decoder layer count.
+        dim_feedforward: Transformer FFN dimension.
+        hidden_dim: Transformer model dimension.
+        dropout: Dropout rate in transformer blocks.
+        nheads: Number of attention heads.
+        pre_norm: Use pre-layernorm transformer blocks.
+        action_dim: Action dimension.
+        proprio_dim: Proprioception (low-dim) input dimension.
+        chunk_size: Action chunk length / number of queries.
+        camera_names: Ordered camera names for image inputs.
+    """
+    backbone: str = "resnet18"
+    pretrained: bool = False
+    dilation: bool = False
+    position_embedding: str = "sine"
+    enc_layers: int = 4
+    dec_layers: int = 7
+    dim_feedforward: int = 3200
+    hidden_dim: int = 512
+    dropout: float = 0.1
+    nheads: int = 8
+    pre_norm: bool = False
+    action_dim: Optional[int] = None
+    proprio_dim: Optional[int] = None
+    chunk_size: int = 100
+    camera_names: List[str] = field(default_factory=list)
+
+
+@dataclass
+class AdamWOptimizerConfig:
+    """AdamW optimizer settings."""
+
+    lr: Optional[float] = None
+    weight_decay: Optional[float] = None
+    betas: Optional[List[float]] = None
+    eps: Optional[float] = None
+
+
+@dataclass
 class ACTConfig:
     exec_horizon: Optional[int] = None
     lr_backbone: float = 1e-5
     kl_weight: float = 10.0
-    backbone: str = "resnet18"
-    dilation: bool = False
-    position_embedding: str = "sine"
-    enc_layers: int = 4
-    dec_layers: int = 6
-    dim_feedforward: int = 2048
-    hidden_dim: int = 256
-    dropout: float = 0.1
-    nheads: int = 8
-    pre_norm: bool = False
-    masks: bool = False  # TODO: rename to return_interm_layers (backbone intermediate outputs).
+    temporal_ensemble_coeff: Optional[float] = None
+    model: ACTModelConfig = field(default_factory=ACTModelConfig)
+    optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
 
     def act_config_dict(self):
+        """Return ACT policy config; drop runtime/training-only keys."""
         data = asdict(self)
         data.pop("exec_horizon", None)
+        data.pop("optimizer", None)
         return data
+
+
+@dataclass
+class CNNMLPModelConfig:
+    """Model config for CNNMLP; pretrained/dilation control ResNet backbone weights/stride."""
+    backbone: str = "resnet18"
+    pretrained: bool = False
+    hidden_dim: int = 256
+    position_embedding: str = "sine"
+    dilation: bool = False
+    action_dim: Optional[int] = None
+    qpos_dim: Optional[int] = None
+    chunk_size: int = 400
+    camera_names: List[str] = field(default_factory=list)
 
 
 @dataclass
 class CNNMLPConfig:
     exec_horizon: Optional[int] = None
-    backbone: str = "resnet18"
     lr_backbone: float = 1e-5
-    hidden_dim: int = 256
-    position_embedding: str = "sine"
-    dilation: bool = False
-    masks: bool = False
+    model: CNNMLPModelConfig = field(default_factory=CNNMLPModelConfig)
+    optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
 
-    def act_config_dict(self):
+    def cnnmlp_config_dict(self):
         data = asdict(self)
         data.pop("exec_horizon", None)
+        data.pop("optimizer", None)
         return data
+
+    def act_config_dict(self):
+        return self.cnnmlp_config_dict()
 
 
 @dataclass
@@ -68,6 +125,7 @@ class DiffusionConfig:
     encoder: ObsEncoderConfig = field(default_factory=ObsEncoderConfig)
     model: DiffusionModelConfig = field(default_factory=DiffusionModelConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
+    optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
 
     def dp_config_dict(self):
         data = self.model.dp_config_dict()
@@ -110,6 +168,8 @@ def get_policy_param(cfg, key, default=None):
         return default
     if key == "act_config":
         return resolved.act_config_dict()
+    if key == "cnnmlp_config":
+        return resolved.cnnmlp_config_dict()
     if key == "dp_config":
         return resolved.dp_config_dict()
     if key == "encoder_config":
