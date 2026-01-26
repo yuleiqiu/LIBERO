@@ -1,22 +1,22 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-"""
-Various positional encodings for the transformer.
-"""
+"""Positional encodings for ACT/DETR-style transformers."""
 import math
+from typing import Optional
+
 import torch
 from torch import nn
 
-from ..util.misc import NestedTensor
-
-import IPython
-e = IPython.embed
 
 class PositionEmbeddingSine(nn.Module):
-    """
-    This is a more standard version of the position embedding, very similar to the one
-    used by the Attention is all you need paper, generalized to work on images.
-    """
-    def __init__(self, num_pos_feats=64, temperature=10000, normalize=False, scale=None):
+    """Sine/cosine positional embedding generalized to images."""
+
+    def __init__(
+        self,
+        num_pos_feats: int = 64,
+        temperature: int = 10000,
+        normalize: bool = False,
+        scale: Optional[float] = None,
+    ) -> None:
         super().__init__()
         self.num_pos_feats = num_pos_feats
         self.temperature = temperature
@@ -27,11 +27,9 @@ class PositionEmbeddingSine(nn.Module):
             scale = 2 * math.pi
         self.scale = scale
 
-    def forward(self, tensor):
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Build a positional embedding for an image tensor."""
         x = tensor
-        # mask = tensor_list.mask
-        # assert mask is not None
-        # not_mask = ~mask
 
         not_mask = torch.ones_like(x[0, [0]])
         y_embed = not_mask.cumsum(1, dtype=torch.float32)
@@ -54,21 +52,21 @@ class PositionEmbeddingSine(nn.Module):
 
 
 class PositionEmbeddingLearned(nn.Module):
-    """
-    Absolute pos embedding, learned.
-    """
-    def __init__(self, num_pos_feats=256):
+    """Learned absolute positional embedding."""
+
+    def __init__(self, num_pos_feats: int = 256) -> None:
         super().__init__()
         self.row_embed = nn.Embedding(50, num_pos_feats)
         self.col_embed = nn.Embedding(50, num_pos_feats)
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         nn.init.uniform_(self.row_embed.weight)
         nn.init.uniform_(self.col_embed.weight)
 
-    def forward(self, tensor_list: NestedTensor):
-        x = tensor_list.tensors
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Return learned positional embedding for an image tensor."""
+        x = tensor
         h, w = x.shape[-2:]
         i = torch.arange(w, device=x.device)
         j = torch.arange(h, device=x.device)
@@ -81,14 +79,17 @@ class PositionEmbeddingLearned(nn.Module):
         return pos
 
 
-def build_position_encoding(args):
-    N_steps = args.hidden_dim // 2
-    if args.position_embedding in ('v2', 'sine'):
+def build_position_encoding(
+    hidden_dim: int, position_embedding_style: str
+) -> nn.Module:
+    """Build a positional encoding module."""
+    N_steps = hidden_dim // 2
+    if position_embedding_style in ("v2", "sine"):
         # TODO find a better way of exposing other arguments
         position_embedding = PositionEmbeddingSine(N_steps, normalize=True)
-    elif args.position_embedding in ('v3', 'learned'):
+    elif position_embedding_style in ("v3", "learned"):
         position_embedding = PositionEmbeddingLearned(N_steps)
     else:
-        raise ValueError(f"not supported {args.position_embedding}")
+        raise ValueError(f"not supported {position_embedding_style}")
 
     return position_embedding
