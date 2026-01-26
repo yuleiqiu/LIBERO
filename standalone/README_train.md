@@ -20,6 +20,7 @@ CNNMLP example:
 python standalone/train.py \
   --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
   --policy.name=cnnmlp \
+  --policy.cnnmlp.model.hidden_dim=256 \
   --paths.save_dir=standalone/standalone_runs/train_cnnmlp_quickcheck
 ```
 
@@ -51,8 +52,10 @@ Train config fields (grouped):
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
 - `policy.name`: policy type (`act` or `cnnmlp`).
-- `policy.act.*`: ACT-specific overrides (e.g., `policy.act.enc_layers`).
-- `policy.cnnmlp.*`: CNNMLP-specific overrides.
+- `policy.act.model.*`: ACT model overrides (e.g., `policy.act.model.enc_layers`).
+- `policy.act.kl_weight`, `policy.act.lr_backbone`: ACT wrapper settings.
+- `policy.cnnmlp.model.*`: CNNMLP model overrides.
+- `policy.cnnmlp.lr_backbone`: CNNMLP wrapper settings.
 - `resume`, `saved_config_path`: resume from an existing run config (JSON).
 - `paths.save_dir`: base directory for run outputs (see below).
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
@@ -107,7 +110,7 @@ Each run directory stores:
   as-is (no auto-increment).
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
 - Policy configs are dataclass-backed; set `policy.name` and override
-  `policy.act.*` or `policy.cnnmlp.*`.
+  `policy.act.model.*` / `policy.cnnmlp.model.*` as needed.
 - `resume: true` loads `train_config.json` from `paths.save_dir` (or `saved_config_path`),
   and `saved_config_path` alone can be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`

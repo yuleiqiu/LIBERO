@@ -14,7 +14,8 @@ swap or migrate algorithms with minimal friction.
   Dataset-level ops should stay here (e.g., image augmentation).
 
 - `models/encoders/`  
-  Shared image / low-dim / obs encoders used across policies.
+  Shared image / low-dim / obs encoders used across policies (e.g., `ImageEncoder`
+  for pooled vectors, `ImageMapEncoder` for ACT-style 2D feature maps).
 
 - `models/policy/`  
   Policy wrappers that inherit `ChunkPolicy` and adapt algorithms to the
@@ -23,9 +24,11 @@ swap or migrate algorithms with minimal friction.
 - `models/modules/`  
   Shared building blocks (legacy; will shrink as encoders/algos mature).
 
-- `act_standalone/`, `dp_standalone/`  
-  Imported or legacy algorithm code. These should gradually move under
-  `models/algos/<name>/` and be wrapped by `models/policy/<name>_policy.py`.
+- `models/algos/`  
+  Algorithm implementations (e.g., `models/algos/act/`, `models/algos/cnnmlp/`, `models/algos/dp/`).
+
+- `dp_standalone/`  
+  Legacy or reference code; keep here only when needed for comparison.
 
 - `train.py`, `rollout.py`, `rollout_env.py`  
   Training and evaluation entrypoints.
@@ -41,7 +44,7 @@ We aim to keep algorithm internals and policy wrappers separate:
 Two structural conventions:
 
 - Inside `models/algos/<name>/`, prefer `core/` (algorithm entry), `model/` (networks),
-  and `common/` (utils) to keep layouts consistent across algorithms.
+  and `utils/` (shared helpers) to keep layouts consistent across algorithms.
 - Reserve the term "policy" for framework wrappers only (`models/policy/`), not
   for algorithm internals.
 
@@ -64,8 +67,8 @@ Explicit rule:
 ```bash
 python standalone/train.py \
   --policy.name=act \
-  --policy.act.dim_feedforward=3200 \
-  --policy.act.hidden_dim=512 \
+  --policy.act.model.dim_feedforward=3200 \
+  --policy.act.model.hidden_dim=512 \
   --data.image_norm=imagenet \
   --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
   --data.predict_horizon=100 \
@@ -86,8 +89,8 @@ python standalone/train.py \
 ```bash
 python standalone/train.py \
   --policy.name=act \
-  --policy.act.dim_feedforward=3200 \
-  --policy.act.hidden_dim=512 \
+  --policy.act.model.dim_feedforward=3200 \
+  --policy.act.model.hidden_dim=512 \
   --data.image_norm=imagenet \
   --data.demo_file=./libero/datasets/libero_object_multi/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
   --data.predict_horizon=100 \
@@ -142,4 +145,18 @@ python standalone/rollout_env.py \
   --num_procs=9 \
   --save_videos 90 \
   --video_dir=standalone/standalone_runs/train_act/run_003/eval_single
+```
+
+## Example Commands (CNNMLP)
+
+```bash
+python standalone/train.py \
+  --policy.name=cnnmlp \
+  --policy.cnnmlp.model.hidden_dim=256 \
+  --data.image_norm=imagenet \
+  --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --data.predict_horizon=100 \
+  --paths.save_dir=standalone/standalone_runs/train_cnnmlp \
+  --training.batch_size=128 \
+  --training.epochs=100
 ```
