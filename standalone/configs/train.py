@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from standalone.configs.data import DataConfig
-from standalone.configs.policy import PolicyConfig
+from standalone.configs.policy import AdamWOptimizerConfig, PolicyConfig
 
 
 @dataclass
@@ -16,6 +16,14 @@ class TrainLoopConfig:
     epochs: int = 10
     val_every: int = 10
     lr: float = 1e-4
+    optimizer: AdamWOptimizerConfig = field(
+        default_factory=lambda: AdamWOptimizerConfig(
+            lr=1e-4,
+            weight_decay=1e-4,
+            betas=[0.9, 0.999],
+            eps=1e-8,
+        )
+    )
     grad_clip: Optional[float] = None
     device: str = "cuda:0"
     ckpt_mode: str = "last"

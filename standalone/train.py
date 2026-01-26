@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -34,19 +35,21 @@ from standalone.dataset_utils.normalizer_utils import (
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
 from standalone.utils.train_utils import (
     TRAIN_CONFIG_NAME,
-    apply_config_dict,
-    cfg_to_dict,
+    apply_config_overrides,
+    build_optimizer,
+    serialize_config,
     load_config_json,
     load_init_states_with_anchors,
-    make_splits,
-    merge_config_with_overrides,
+    make_split_indices,
+    merge_config_overrides,
     resolve_run_dir,
     sample_per_anchor,
     write_run_metadata,
 )
 
 
-def set_seed(seed):
+def set_seed(seed: int) -> None:
+    """Set random seeds for numpy and torch."""
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -61,7 +64,8 @@ RESUME_OVERRIDE_ALLOWLIST = [
 ]
 
 
-def reject_draccus_config():
+def reject_draccus_config() -> None:
+    """Disable YAML configs; enforce JSON/CLI overrides."""
     config_arg = None
     for idx, arg in enumerate(sys.argv):
         if arg == "--config" and idx + 1 < len(sys.argv):
@@ -77,10 +81,11 @@ def reject_draccus_config():
         )
 
 
-def apply_resume_config(cfg):
+def apply_resume_config(cfg: TrainConfig) -> Tuple[TrainConfig, Optional[Path]]:
+    """Load and apply resume config if requested."""
     if not getattr(cfg, "resume", False) and not getattr(cfg, "saved_config_path", None):
         return cfg, None
-    cfg_dict = cfg_to_dict(cfg)
+    cfg_dict = serialize_config(cfg)
     config_path = None
     if cfg.saved_config_path:
         config_path = Path(cfg.saved_config_path).expanduser().resolve()
@@ -106,20 +111,20 @@ def apply_resume_config(cfg):
     saved_cfg = load_config_json(config_path)
     if "saved_config_path" not in saved_cfg and "config_path" in saved_cfg:
         saved_cfg["saved_config_path"] = saved_cfg["config_path"]
-    defaults_dict = cfg_to_dict(TrainConfig())
-    merged_cfg = merge_config_with_overrides(
+    defaults_dict = serialize_config(TrainConfig())
+    merged_cfg = merge_config_overrides(
         saved_cfg, cfg_dict, RESUME_OVERRIDE_ALLOWLIST, defaults=defaults_dict
     )
     merged_cfg["saved_config_path"] = str(config_path)
     merged_cfg["resume"] = bool(getattr(cfg, "resume", False))
-    apply_config_dict(cfg, merged_cfg)
+    apply_config_overrides(cfg, merged_cfg)
     if getattr(cfg, "resume", False):
         cfg.paths.save_dir = str(config_path.parent)
     return cfg, config_path
 
 
 @draccus.wrap()
-def main(cfg: TrainConfig):
+def main(cfg: TrainConfig) -> None:
     reject_draccus_config()
     cfg, _ = apply_resume_config(cfg)
     apply_policy_config(cfg)
@@ -173,7 +178,7 @@ def main(cfg: TrainConfig):
         print("[warn] ACT/CNNMLP/DP policy ignores obs normalization; disabling normalize_obs.")
         cfg.data.normalize_obs = False
     if not cfg.resume:
-        cfg_dict = cfg_to_dict(cfg)
+        cfg_dict = serialize_config(cfg)
         if isinstance(cfg_dict, dict):
             cfg_dict["policy"] = serialize_policy_config(cfg)
         write_run_metadata(save_dir, cfg, cfg_dict=cfg_dict)
@@ -210,7 +215,7 @@ def main(cfg: TrainConfig):
         image_transforms=cfg.data.image_transforms,
     )
 
-    train_idx, val_idx = make_splits(
+    train_idx, val_idx = make_split_indices(
         len(base_dataset), cfg.data.train_ratio, cfg.data.val_ratio, cfg.data.seed
     )
     with open(split_path, "w") as f:
@@ -264,8 +269,8 @@ def main(cfg: TrainConfig):
     sample = base_dataset[train_idx[0]]
     action_dim = sample["actions"].shape[-1]
     # print(f"[debug] action_dim: {action_dim}")
-    qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
-    # print(f"[debug] qpos_dim: {qpos_dim}")
+    proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
+    # print(f"[debug] proprio_dim: {proprio_dim}")
     image_shapes = {}
     obs_shapes = {}
     for key, value in sample["obs"].items():
@@ -319,7 +324,7 @@ def main(cfg: TrainConfig):
         obs_keys,
         image_keys,
         action_dim,
-        qpos_dim=qpos_dim,
+        proprio_dim=proprio_dim,
         obs_shapes=obs_shapes,
     )
     if policy_name == "dp":
@@ -327,7 +332,7 @@ def main(cfg: TrainConfig):
             raise ValueError("dp normalizer is required but was not initialized")
         model.set_normalizer(dp_normalizer)
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.lr)
+    optimizer = build_optimizer(cfg, model, policy_name)
     def _model_state_for_ckpt():
         state = model.state_dict()
         if policy_name == "dp":
