@@ -578,6 +578,7 @@ def run_env_rollouts(
                 obs = extract_env_obs(env_obs, obs_keys, image_keys, obs_key_mapping)
                 history.add(obs)
 
+                # TODO: consider requiring success to hold for N consecutive steps
                 if done:
                     successes += 1
                     break
@@ -751,6 +752,7 @@ def run_env_rollouts(
             for i in range(remaining):
                 if not dones[i]:
                     steps_by_env[i] += 1
+                # TODO: consider requiring success to hold for N consecutive steps
                 if bool(done_array[i]):
                     dones[i] = True
             curr_done = sum(1 for d in dones[:remaining] if d)
@@ -898,14 +900,14 @@ def main(cfg: RolloutConfig):
 
     if policy_name not in ("act", "cnnmlp", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
-    qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
+    proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
     obs_shapes = {key: value.shape for key, value in sample["obs"].items()}
     model = build_policy(
         cfg,
         obs_keys,
         image_keys,
         action_dim,
-        qpos_dim=qpos_dim,
+        proprio_dim=proprio_dim,
         obs_shapes=obs_shapes,
     )
 

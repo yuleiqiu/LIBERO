@@ -65,7 +65,7 @@ def main(cfg: RolloutConfig):
     print(f"[debug] action_dim: {action_dim}")
     if policy_name not in ("act", "cnnmlp", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
-    qpos_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
+    proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
     for key in image_keys:
         if key not in sample["obs"]:
             raise KeyError(f"image key not found in obs: {key}")
@@ -75,7 +75,7 @@ def main(cfg: RolloutConfig):
         obs_keys,
         image_keys,
         action_dim,
-        qpos_dim=qpos_dim,
+        proprio_dim=proprio_dim,
         obs_shapes=obs_shapes,
     )
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
