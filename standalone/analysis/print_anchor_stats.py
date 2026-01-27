@@ -93,6 +93,7 @@ def plot_anchor_success(
     show_ranges: bool,
     annotate: bool,
     illustration_path: Optional[Path],
+    print_anchor_coords: bool,
     workspace_rect,
     robot_coords,
     basket_coords,
@@ -121,6 +122,35 @@ def plot_anchor_success(
     if skipped:
         preview = ", ".join(map(str, skipped[:5]))
         print(f"[warning] skipped non-integer anchor ids: {preview}")
+    if print_anchor_coords:
+        print("Anchor coordinates in original environment frame:")
+        for anchor_id, (xmin, ymin, xmax, ymax) in enumerate(discrete_ranges):
+            cx = (xmin + xmax) / 2.0
+            cy = (ymin + ymax) / 2.0
+            print(
+                f"  anchor {anchor_id}: center=({cx:.4f}, {cy:.4f}), "
+                f"range=({xmin:.4f}, {ymin:.4f})-({xmax:.4f}, {ymax:.4f})"
+            )
+
+    def rotate_xy_cw(xy):
+        return np.array([xy[1], -xy[0]])
+
+    def rotate_rect_cw(xmin, ymin, xmax, ymax):
+        corners = np.array(
+            [
+                [xmin, ymin],
+                [xmax, ymin],
+                [xmax, ymax],
+                [xmin, ymax],
+            ]
+        )
+        rotated = np.array([rotate_xy_cw(pt) for pt in corners])
+        min_corner = rotated.min(axis=0)
+        max_corner = rotated.max(axis=0)
+        width_height = max_corner - min_corner
+        return min_corner, width_height
+
+    plot_centers = np.array([rotate_xy_cw(pt) for pt in range_centers])
 
     rates = []
     stats_list = []
@@ -130,12 +160,12 @@ def plot_anchor_success(
         rate = compute_success_rate(stats)
         rates.append(rate if rate is not None else np.nan)
 
-    x_centers = np.unique(range_centers[:, 0])
-    y_centers = np.unique(range_centers[:, 1])
+    x_centers = np.unique(plot_centers[:, 0])
+    y_centers = np.unique(plot_centers[:, 1])
     x_centers.sort()
     y_centers.sort()
 
-    if len(x_centers) * len(y_centers) != len(range_centers):
+    if len(x_centers) * len(y_centers) != len(plot_centers):
         raise ValueError(
             "Anchor centers do not form a full grid; cannot build 2D matrix plot."
         )
@@ -147,7 +177,7 @@ def plot_anchor_success(
 
     rate_grid = np.full((len(y_centers), len(x_centers)), np.nan)
     label_grid = [[None for _ in range(len(x_centers))] for _ in range(len(y_centers))]
-    for idx, (cx, cy) in enumerate(range_centers):
+    for idx, (cx, cy) in enumerate(plot_centers):
         col = int(np.where(np.isclose(x_centers, cx))[0][0])
         row = int(np.where(np.isclose(y_centers, cy))[0][0])
         rate_grid[row, col] = rates[idx]
@@ -180,17 +210,18 @@ def plot_anchor_success(
                     label,
                     ha="center",
                     va="center",
-                    fontsize=8,
+                    fontsize=14,
                     color="black",
                     fontweight="bold" if rate_grid[row, col] >= 0.8 else "normal",
                 )
 
     if show_ranges:
         for xmin, ymin, xmax, ymax in discrete_ranges:
+            (rx, ry), (rw, rh) = rotate_rect_cw(xmin, ymin, xmax, ymax)
             rect = patches.Rectangle(
-                (xmin, ymin),
-                xmax - xmin,
-                ymax - ymin,
+                (rx, ry),
+                rw,
+                rh,
                 linewidth=0.8,
                 edgecolor="black",
                 facecolor="none",
@@ -198,8 +229,8 @@ def plot_anchor_success(
             )
             ax.add_patch(rect)
 
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
+    ax.set_xlabel("")
+    ax.set_ylabel("")
     ax.set_title("Anchor Success Rates")
     ax.set_aspect("equal", "box")
     ax.set_xticks([])
@@ -219,7 +250,7 @@ def plot_anchor_success(
         return
 
     def rotate_xy(xy):
-        return np.array([xy[1], -xy[0]])
+        return np.array([xy[1], xy[0]])
 
     def rotate_rect(xmin, ymin, xmax, ymax):
         corners = np.array(
@@ -258,30 +289,22 @@ def plot_anchor_success(
     ax_overview.plot(basket_rot[0], basket_rot[1], "bo", markersize=8, label="Basket")
 
     for idx, (cx, cy) in enumerate(rotated_centers):
-        ax_overview.scatter(
-            cx,
-            cy,
-            marker="o",
-            s=55,
-            color="white",
-            edgecolor="black",
-            linewidths=0.6,
-        )
         ax_overview.text(
             cx,
             cy,
             str(idx),
             ha="center",
             va="center",
-            fontsize=8,
+            fontsize=15,
             color="black",
         )
 
-    ax_overview.set_xlabel("Original Y-Coordinate")
-    ax_overview.set_ylabel("Original X-Coordinate")
-    ax_overview.set_title("Workspace overview (rotated)", pad=12)
+    ax_overview.set_xlabel("Y")
+    ax_overview.set_ylabel("X")
+    ax_overview.set_title("Workspace overview", pad=12)
     ax_overview.grid(True)
     ax_overview.set_aspect("equal", adjustable="box")
+    ax_overview.invert_yaxis()
 
     ax_overview.legend(
         loc="upper left",
@@ -321,6 +344,11 @@ def main():
         "--show-ranges",
         action="store_true",
         help="Overlay anchor range rectangles on the plot.",
+    )
+    parser.add_argument(
+        "--print-anchor-coords",
+        action="store_true",
+        help="Print anchor centers and ranges in the original environment frame.",
     )
     parser.add_argument(
         "--no-annotate",
@@ -418,6 +446,7 @@ def main():
         show_ranges=args.show_ranges,
         annotate=not args.no_annotate,
         illustration_path=illustration_path,
+        print_anchor_coords=args.print_anchor_coords,
         workspace_rect=args.workspace_rect,
         robot_coords=args.robot_coords,
         basket_coords=args.basket_coords,
