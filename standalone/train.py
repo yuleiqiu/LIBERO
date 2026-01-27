@@ -189,10 +189,13 @@ def main(cfg: TrainConfig) -> None:
     val_every = int(cfg.training.val_every)
     rollout_every = int(cfg.rollout.every)
     ckpt_mode = str(getattr(cfg.training, "ckpt_mode", "last")).lower()
+    save_ckpt_every = int(getattr(cfg.training, "save_ckpt_every", 1))
     if val_every < 0:
         raise ValueError("val_every must be >= 0")
     if rollout_every < 0:
         raise ValueError("rollout_every must be >= 0")
+    if save_ckpt_every <= 0:
+        raise ValueError("training.save_ckpt_every must be >= 1")
     if ckpt_mode not in ("last", "best", "all"):
         raise ValueError("training.ckpt_mode must be one of: last, best, all")
     if cfg.rollout.steps <= 0:
@@ -386,6 +389,7 @@ def main(cfg: TrainConfig) -> None:
     best_ckpt_path = save_dir / "model_best.pt"
     final_ckpt_path = None
     printed_batch = False
+    last_ckpt_epoch = None
     for epoch in range(1, cfg.training.epochs + 1):
         model.train()
         train_losses = []
@@ -543,19 +547,29 @@ def main(cfg: TrainConfig) -> None:
                 log_data["val/loss"] = avg_val
             wandb.log(log_data, step=epoch)
 
-        if ckpt_mode == "all":
+        if ckpt_mode == "all" and epoch % save_ckpt_every == 0:
             ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
             torch.save(
                 {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
                 ckpt_path,
             )
             final_ckpt_path = ckpt_path
+            last_ckpt_epoch = epoch
         elif ckpt_mode == "last":
             torch.save(
                 {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
                 last_ckpt_path,
             )
             final_ckpt_path = last_ckpt_path
+
+    if ckpt_mode == "all" and last_ckpt_epoch != cfg.training.epochs:
+        epoch = cfg.training.epochs
+        ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
+        torch.save(
+            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+            ckpt_path,
+        )
+        final_ckpt_path = ckpt_path
 
     if ckpt_mode == "best" and best_rollout is None:
         print(

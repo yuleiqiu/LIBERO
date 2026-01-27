@@ -27,6 +27,7 @@ class TrainLoopConfig:
     grad_clip: Optional[float] = None
     device: str = "cuda:0"
     ckpt_mode: str = "last"
+    save_ckpt_every: int = 1
 
 
 @dataclass
