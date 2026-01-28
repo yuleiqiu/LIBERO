@@ -104,6 +104,14 @@ def main(cfg: TrainConfig) -> None:
         raise ValueError("rollout_num_procs must be >= 1")
     if cfg.rollout.env_horizon <= 0:
         raise ValueError("rollout.env_horizon must be >= 1")
+    save_topk = int(getattr(cfg.training, "save_topk", 0) or 0)
+    if save_topk > 0:
+        if rollout_every <= 0:
+            raise ValueError("training.save_topk requires rollout.every > 0")
+        if save_ckpt_every % rollout_every != 0:
+            raise ValueError(
+                "training.save_topk requires save_ckpt_every to be a multiple of rollout.every"
+            )
 
     base_dataset = HDF5SequenceDataset(
         hdf5_path=str(demo_path),
