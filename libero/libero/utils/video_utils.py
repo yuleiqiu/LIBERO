@@ -32,7 +32,20 @@ class VideoWriter:
             if idx not in self.image_buffer:
                 self.image_buffer[idx] = []
             # Always record the actual frame; no end-of-episode tinting.
-            frame = obs[camera_name][::-1]
+            if isinstance(camera_name, (list, tuple)):
+                frames = []
+                for name in camera_name:
+                    if name not in obs:
+                        raise KeyError(f"camera {name} not in obs keys: {list(obs.keys())}")
+                    frame = obs[name][::-1]
+                    frames.append(frame)
+                heights = {frame.shape[0] for frame in frames}
+                channels = {frame.shape[2] if frame.ndim == 3 else None for frame in frames}
+                if len(heights) != 1 or len(channels) != 1:
+                    raise ValueError("camera frames must share height and channels for concatenation")
+                frame = np.concatenate(frames, axis=1)
+            else:
+                frame = obs[camera_name][::-1]
             self.last_images[idx] = frame
             self.image_buffer[idx].append(frame)
 

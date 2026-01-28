@@ -12,6 +12,8 @@ clip/
 gpt/
 bert/
 logs/
+standalone/act_standalone/
+standalone/dp_standalone/
 
 *.mp4
 libero.egg-info/
