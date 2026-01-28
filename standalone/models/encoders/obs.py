@@ -2,7 +2,7 @@ import dataclasses
 import torch
 import torch.nn as nn
 
-from standalone.models.encoders.image import ImageEncoder
+from standalone.models.encoders.image import DPImageEncoder, ImageEncoder
 from standalone.models.encoders.lowdim import LowdimEncoder
 
 
@@ -25,13 +25,29 @@ class ObsEncoder(nn.Module):
         self.output_dim = None
         self.fusion_proj = None
 
+        # TODO: For DP, support per-camera encoders with independent weights
+        # to match the Diffusion Policy paper (currently encoders are shared).
+
         image_dim = 0
         if self.image_keys and self.image_encoder is None:
             raise ValueError("image_encoder is required when image_keys are provided")
         if self.image_encoder is not None:
-            image_dim = int(getattr(self.image_encoder, "output_dim", 0))
-            if image_dim <= 0:
-                raise ValueError("image_encoder must define output_dim")
+            if isinstance(self.image_encoder, nn.ModuleList):
+                if len(self.image_encoder) != len(self.image_keys):
+                    raise ValueError(
+                        "image_encoder ModuleList must match image_keys length "
+                        f"({len(self.image_encoder)} vs {len(self.image_keys)})"
+                    )
+                dims = [int(getattr(enc, "output_dim", 0)) for enc in self.image_encoder]
+                if not dims or any(d <= 0 for d in dims):
+                    raise ValueError("all image encoders must define output_dim")
+                if len(set(dims)) != 1:
+                    raise ValueError("all image encoders must have the same output_dim")
+                image_dim = dims[0]
+            else:
+                image_dim = int(getattr(self.image_encoder, "output_dim", 0))
+                if image_dim <= 0:
+                    raise ValueError("image_encoder must define output_dim")
 
         lowdim_dim = 0
         if self.lowdim_keys:
@@ -81,11 +97,18 @@ class ObsEncoder(nn.Module):
         features = []
         if self.image_keys:
             image_feats = []
-            for key in self.image_keys:
-                if key not in obs:
-                    raise KeyError(f"missing image key: {key}")
-                x = self._to_image_tensor(obs[key])
-                image_feats.append(self.image_encoder(x))
+            if isinstance(self.image_encoder, nn.ModuleList):
+                for key, encoder in zip(self.image_keys, self.image_encoder, strict=True):
+                    if key not in obs:
+                        raise KeyError(f"missing image key: {key}")
+                    x = self._to_image_tensor(obs[key])
+                    image_feats.append(encoder(x))
+            else:
+                for key in self.image_keys:
+                    if key not in obs:
+                        raise KeyError(f"missing image key: {key}")
+                    x = self._to_image_tensor(obs[key])
+                    image_feats.append(self.image_encoder(x))
             if self.image_fusion == "mean":
                 fused = torch.stack(image_feats, dim=0).mean(dim=0)
             else:
@@ -168,17 +191,38 @@ def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None):
             image_cfg["crop_randomizer"] = None
 
         image_type = str(image_cfg.get("type", "resnet")).lower()
-        if image_type != "resnet":
+        if image_type == "resnet":
+            image_encoder = ImageEncoder(
+                input_shape=encoder_input_shape,
+                output_dim=image_cfg.get("output_dim", 128),
+                backbone=image_cfg.get("backbone", "resnet18"),
+                pretrained=image_cfg.get("pretrained", False),
+                remove_layer_num=image_cfg.get("remove_layer_num", 2),
+                no_stride=image_cfg.get("no_stride", False),
+                crop_randomizer=image_cfg.get("crop_randomizer"),
+            )
+        elif image_type == "dp_resnet":
+            def _build_dp_encoder():
+                return DPImageEncoder(
+                    input_shape=encoder_input_shape,
+                    output_dim=image_cfg.get("output_dim"),
+                    backbone=image_cfg.get("backbone", "resnet18"),
+                    pretrained=image_cfg.get("pretrained", False),
+                    remove_layer_num=image_cfg.get("remove_layer_num", 2),
+                    no_stride=image_cfg.get("no_stride", False),
+                    crop_randomizer=image_cfg.get("crop_randomizer"),
+                    use_group_norm=image_cfg.get("use_group_norm", True),
+                    spatial_softmax_num_keypoints=image_cfg.get(
+                        "spatial_softmax_num_keypoints", 32
+                    ),
+                )
+
+            if image_cfg.get("use_separate_rgb_encoder_per_camera", False):
+                image_encoder = nn.ModuleList([_build_dp_encoder() for _ in image_keys])
+            else:
+                image_encoder = _build_dp_encoder()
+        else:
             raise ValueError(f"unsupported image encoder type: {image_type}")
-        image_encoder = ImageEncoder(
-            input_shape=encoder_input_shape,
-            output_dim=image_cfg.get("output_dim", 128),
-            backbone=image_cfg.get("backbone", "resnet18"),
-            pretrained=image_cfg.get("pretrained", False),
-            remove_layer_num=image_cfg.get("remove_layer_num", 2),
-            no_stride=image_cfg.get("no_stride", False),
-            crop_randomizer=image_cfg.get("crop_randomizer"),
-        )
 
     lowdim_encoder = None
     if lowdim_keys:

@@ -107,11 +107,20 @@ class DiffusionModelConfig:
     n_action_steps: Optional[int] = None
     n_obs_steps: Optional[int] = None
     num_inference_steps: Optional[int] = None
-    diffusion_step_embed_dim: int = 256
-    down_dims: List[int] = field(default_factory=lambda: [256, 512, 1024])
+    diffusion_step_embed_dim: int = 128
+    down_dims: List[int] = field(default_factory=lambda: [512, 1024, 2048])
     kernel_size: int = 5
     n_groups: int = 8
     cond_predict_scale: bool = True
+    noise_scheduler_type: str = "DDPM"
+    num_train_timesteps: int = 100
+    beta_schedule: str = "squaredcos_cap_v2"
+    beta_start: float = 0.0001
+    beta_end: float = 0.02
+    prediction_type: str = "epsilon"
+    clip_sample: bool = True
+    clip_sample_range: float = 1.0
+    do_mask_loss_for_padding: bool = False
     noise_scheduler: Dict[str, Any] = field(default_factory=dict)
 
     def dp_config_dict(self):

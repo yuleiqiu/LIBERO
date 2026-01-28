@@ -19,6 +19,9 @@ class ImageEncoderConfig:
     pretrained: bool = False
     remove_layer_num: int = 2
     no_stride: bool = False
+    use_group_norm: bool = True
+    spatial_softmax_num_keypoints: int = 32
+    use_separate_rgb_encoder_per_camera: bool = False
     crop_randomizer: CropRandomizerConfig = field(default_factory=CropRandomizerConfig)
 
 

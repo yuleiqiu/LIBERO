@@ -1,4 +1,5 @@
 import torch
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 from standalone.models.algos.dp.core.diffusion_model import DiffusionModel
@@ -45,8 +46,19 @@ class DiffusionPolicy(ChunkPolicy):
         n_obs_steps = int(cfg.pop("n_obs_steps", self.obs_horizon))
 
         if noise_scheduler is None:
-            scheduler_kwargs = dict(cfg.pop("noise_scheduler", {}))
-            noise_scheduler = DDPMScheduler(**scheduler_kwargs)
+            noise_scheduler_type = str(cfg.pop("noise_scheduler_type", "DDPM"))
+            scheduler_cls = {"DDPM": DDPMScheduler, "DDIM": DDIMScheduler}.get(noise_scheduler_type)
+            if scheduler_cls is None:
+                raise ValueError(f"unsupported noise_scheduler_type: {noise_scheduler_type}")
+            noise_scheduler = scheduler_cls(
+                num_train_timesteps=int(cfg.pop("num_train_timesteps", 100)),
+                beta_start=float(cfg.pop("beta_start", 0.0001)),
+                beta_end=float(cfg.pop("beta_end", 0.02)),
+                beta_schedule=str(cfg.pop("beta_schedule", "squaredcos_cap_v2")),
+                prediction_type=str(cfg.pop("prediction_type", "epsilon")),
+                clip_sample=bool(cfg.pop("clip_sample", True)),
+                clip_sample_range=float(cfg.pop("clip_sample_range", 1.0)),
+            )
 
         self.diffusion_model = DiffusionModel(
             shape_meta=shape_meta,
@@ -100,12 +112,15 @@ class DiffusionPolicy(ChunkPolicy):
             raise NotImplementedError("Only mean/sum reductions are supported.")
         obs = batch["obs"]
         actions = batch["actions"]
+        action_mask = batch.get("action_mask")
         device = next(self.parameters()).device
         obs = self._prepare_obs(obs, device, batched=True)
         if not torch.is_tensor(actions):
             actions = torch.as_tensor(actions)
         actions = actions.to(device=device, dtype=torch.float32)
-        loss = self.diffusion_model.compute_loss({"obs": obs, "action": actions})
+        loss = self.diffusion_model.compute_loss(
+            {"obs": obs, "action": actions, "action_mask": action_mask}
+        )
         if reduction == "sum":
             loss = loss * actions.shape[0]
         if not return_stats:

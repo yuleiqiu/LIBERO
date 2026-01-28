@@ -24,6 +24,27 @@ python standalone/train.py \
   --paths.save_dir=standalone/standalone_runs/train_cnnmlp_quickcheck
 ```
 
+Diffusion Policy example (DP encoder with SpatialSoftmax + GroupNorm):
+
+```bash
+python standalone/train.py \
+  --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
+  --policy.name=dp \
+  --data.obs_horizon=2 \
+  --data.predict_horizon=8 \
+  --data.image_norm=scale_0_1 \
+  --policy.dp.encoder.image.type=dp_resnet \
+  --policy.dp.encoder.image.pretrained=false \
+  --policy.dp.encoder.image.use_group_norm=true \
+  --policy.dp.encoder.image.spatial_softmax_num_keypoints=32 \
+  --policy.dp.model.horizon=16 \
+  --policy.dp.model.n_obs_steps=2 \
+  --policy.dp.model.n_action_steps=8 \
+  --policy.dp.model.noise_scheduler_type=DDPM \
+  --policy.dp.model.do_mask_loss_for_padding=true \
+  --paths.save_dir=standalone/standalone_runs/train_dp_quickcheck
+```
+
 Resume or reproduce from a saved config:
 
 ```bash

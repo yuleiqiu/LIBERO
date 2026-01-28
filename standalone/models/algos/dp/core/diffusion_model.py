@@ -19,11 +19,12 @@ class DiffusionModel(nn.Module):
             n_obs_steps,
             obs_encoder=None,
             num_inference_steps=None,
-            diffusion_step_embed_dim=256,
-            down_dims=(256,512,1024),
+            diffusion_step_embed_dim=128,
+            down_dims=(512,1024,2048),
             kernel_size=5,
             n_groups=8,
             cond_predict_scale=True,
+            do_mask_loss_for_padding=False,
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -64,6 +65,14 @@ class DiffusionModel(nn.Module):
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.kwargs = kwargs
+        self.do_mask_loss_for_padding = bool(do_mask_loss_for_padding)
+
+        downsampling_factor = 2 ** len(down_dims)
+        if horizon % downsampling_factor != 0:
+            raise ValueError(
+                "horizon should be an integer multiple of the downsampling factor "
+                f"(2 ** len(down_dims) = {downsampling_factor}). Got horizon={horizon}."
+            )
 
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
@@ -204,6 +213,16 @@ class DiffusionModel(nn.Module):
             raise ValueError(f"Unsupported prediction type {pred_type}")
 
         loss = F.mse_loss(pred, target, reduction='none')
+        if self.do_mask_loss_for_padding:
+            if "action_is_pad" in batch:
+                in_episode_bound = ~batch["action_is_pad"].to(device=loss.device)
+            elif "action_mask" in batch and batch["action_mask"] is not None:
+                in_episode_bound = batch["action_mask"].to(device=loss.device) > 0
+            else:
+                raise ValueError(
+                    "do_mask_loss_for_padding=True requires action_is_pad or action_mask in batch"
+                )
+            loss = loss * in_episode_bound.unsqueeze(-1)
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
         return loss
