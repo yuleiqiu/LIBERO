@@ -14,8 +14,18 @@ import h5py
 import numpy as np
 import torch
 
+from standalone.configs import TrainConfig, apply_policy_config, serialize_policy_config
+
 TRAIN_CONFIG_NAME = "train_config.json"
 _RUN_DIR_PATTERN = re.compile(r"^run_(\d+)$")
+
+RESUME_OVERRIDE_ALLOWLIST = [
+    "training.device",
+    "logging.use_wandb",
+    "logging.wandb_project",
+    "logging.wandb_entity",
+    "logging.experiment_name",
+]
 
 
 # --- Run directory helpers ---
@@ -108,6 +118,91 @@ def merge_config_overrides(
         if override_value != saved_value:
             _set_by_path(merged, key, override_value)
     return merged
+
+
+def reject_draccus_config() -> None:
+    """Disable YAML configs; enforce JSON/CLI overrides."""
+    config_arg = None
+    for idx, arg in enumerate(sys.argv):
+        if arg == "--config" and idx + 1 < len(sys.argv):
+            config_arg = sys.argv[idx + 1]
+            break
+        if arg.startswith("--config="):
+            config_arg = arg.split("=", 1)[1]
+            break
+    if config_arg:
+        raise ValueError(
+            "YAML configs are disabled. Use CLI overrides with dataclass defaults, "
+            "or pass saved_config_path/resume to load train_config.json."
+        )
+
+
+def apply_resume_config(cfg: TrainConfig) -> Tuple[TrainConfig, Optional[Path]]:
+    """Load and apply resume config if requested."""
+    if not getattr(cfg, "resume", False) and not getattr(cfg, "saved_config_path", None):
+        return cfg, None
+    cfg_dict = serialize_config(cfg)
+    config_path = None
+    if cfg.saved_config_path:
+        config_path = Path(cfg.saved_config_path).expanduser().resolve()
+    if config_path is None and getattr(cfg, "resume", False):
+        config_path = Path(cfg.paths.save_dir).expanduser().resolve() / TRAIN_CONFIG_NAME
+    if config_path is None:
+        return cfg, None
+    if config_path.suffix.lower() in (".yml", ".yaml"):
+        raise ValueError(
+            "YAML configs are disabled. Use train_config.json or CLI overrides."
+        )
+    if not config_path.exists():
+        if config_path.name == TRAIN_CONFIG_NAME:
+            legacy_path = config_path.with_name("config.json")
+            if legacy_path.exists():
+                config_path = legacy_path
+            else:
+                raise FileNotFoundError(f"config not found: {config_path}")
+        else:
+            raise FileNotFoundError(f"config not found: {config_path}")
+    saved_cfg = load_config_json(config_path)
+    if "saved_config_path" not in saved_cfg and "config_path" in saved_cfg:
+        saved_cfg["saved_config_path"] = saved_cfg["config_path"]
+    defaults_dict = serialize_config(TrainConfig())
+    merged_cfg = merge_config_overrides(
+        saved_cfg, cfg_dict, RESUME_OVERRIDE_ALLOWLIST, defaults=defaults_dict
+    )
+    merged_cfg["saved_config_path"] = str(config_path)
+    merged_cfg["resume"] = bool(getattr(cfg, "resume", False))
+    apply_config_overrides(cfg, merged_cfg)
+    if getattr(cfg, "resume", False):
+        cfg.paths.save_dir = str(config_path.parent)
+    return cfg, config_path
+
+
+def prepare_train_config(cfg: TrainConfig) -> Tuple[TrainConfig, Path, Optional[Path]]:
+    """Apply resume logic, policy config, and resolve save_dir."""
+    reject_draccus_config()
+    cfg, config_path = apply_resume_config(cfg)
+    apply_policy_config(cfg)
+    if not cfg.data.demo_file:
+        raise ValueError("data.demo_file is required")
+
+    if cfg.resume:
+        save_dir = Path(cfg.paths.save_dir).expanduser().resolve()
+        if not save_dir.exists():
+            raise FileNotFoundError(f"resume dir not found: {save_dir}")
+        print(f"[info] resuming in {save_dir}")
+    else:
+        save_dir = resolve_run_dir(Path(cfg.paths.save_dir))
+        save_dir.mkdir(parents=True, exist_ok=True)
+        cfg.paths.save_dir = str(save_dir)
+        print(f"[info] saving to {save_dir}")
+
+    if not cfg.resume:
+        cfg_dict = serialize_config(cfg)
+        if isinstance(cfg_dict, dict):
+            cfg_dict["policy"] = serialize_policy_config(cfg)
+        write_run_metadata(save_dir, cfg, cfg_dict=cfg_dict)
+
+    return cfg, save_dir, config_path
 
 
 # --- Run metadata helpers ---

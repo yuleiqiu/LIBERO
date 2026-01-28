@@ -82,7 +82,6 @@ python standalone/train.py \
   --paths.save_dir=standalone/standalone_runs/train_act \
   --training.batch_size=128 \
   --training.epochs=100 \
-  --training.ckpt_mode=all \
   --rollout.init_states_dir=./libero/libero/init_files \
   --rollout.warmup_steps=10 \
   --rollout.use_mp=true \

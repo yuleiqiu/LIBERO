@@ -81,7 +81,8 @@ Train config fields (grouped):
 - `paths.save_dir`: base directory for run outputs (see below).
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
 - `training.val_every`, `training.grad_clip`, `training.device`: validation cadence, grad clip, device.
-- `training.ckpt_mode`: checkpoint saving policy (`last`, `best`, or `all`).
+- `training.save_ckpt_every`: save logic trigger period (in epochs).
+- `training.save_topk`: number of top-K checkpoints to keep (by success_rate).
 - `training.scheduler.*`: optional global LR scheduler defaults (overridden by policy schedulers).
 - `policy.<name>.scheduler.*`: optional per-policy LR scheduler settings (see below).
 - `rollout.every`: training-time rollout interval (0 disables rollouts).
@@ -110,9 +111,8 @@ Each run directory stores:
 - `command.txt`: the exact CLI used to launch the run
 - `run_meta.json`: metadata like `started_at`
 - `split_indices.json`: train/val split indices
-- `model_last.pt`: latest checkpoint when `training.ckpt_mode=last`
-- `model_best.pt`: best rollout checkpoint when `training.ckpt_mode=best`
-- `model_epoch_###.pt`: per-epoch checkpoints when `training.ckpt_mode=all`
+- `model_last.pt`: latest checkpoint (always saved when save logic triggers)
+- `model_topk_epoch_###.pt`: top-K checkpoints by success rate (saved when enabled)
 - `obs_stats.json`: only when `data.normalize_obs` is enabled
 - `rollout_videos/`: only when rollouts are enabled (training uses `val/epoch_###`,
   post-training defaults to `eval/`)
@@ -127,8 +127,11 @@ Each run directory stores:
   train/val split from `data.train_ratio`/`data.val_ratio`.
 - `rollout.init_states_dir` defaults to the LIBERO init_states path if unset.
 - `rollout.env_horizon` defaults to 2000 for training-time rollouts.
-- `training.ckpt_mode=best` saves `model_best.pt` based on rollout success rate and
-  requires rollouts to run; `all` saves `model_epoch_###.pt` each epoch.
+- `training.save_ckpt_every` gates save logic: only epochs where `epoch % save_ckpt_every == 0` trigger saves.
+- When save logic triggers, `model_last.pt` is always updated.
+- Top-K saving uses `success_rate` from rollouts and only runs on save-trigger epochs.
+  It keeps `training.save_topk` checkpoints (default 5) and writes `topk.json` with
+  `epoch`, `success_rate`, and `path`.
 - If you pass a `paths.save_dir` that already ends with `run_###`, it will be used
   as-is (no auto-increment).
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
@@ -201,8 +204,8 @@ python standalone/rollout_env.py \
 Notes:
 
 - `ckpt` must point to the actual `run_###/model_last.pt` you want to evaluate.
-- If `training.ckpt_mode` is `best` or `all`, use `model_best.pt` or
-  `model_epoch_###.pt` instead of `model_last.pt`.
+- Use `model_topk_epoch_###.pt` for high-performing snapshots, and `model_last.pt`
+  for the most recent snapshot.
 - When `use_ckpt_config: true` (default), `data.*` and `policy.*` are filled
   from `train_config.json` in the checkpoint directory. Old checkpoints without
   this file still need explicit `data`/`policy` fields.

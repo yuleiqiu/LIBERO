@@ -1,5 +1,4 @@
 import json
-import sys
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -16,11 +15,7 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from standalone.configs import (
-    TrainConfig,
-    apply_policy_config,
-    serialize_policy_config,
-)
+from standalone.configs import TrainConfig, serialize_policy_config
 from standalone.dataset_utils.hdf5_sequence_dataset import (
     HDF5SequenceDataset,
     compute_obs_stats,
@@ -34,18 +29,12 @@ from standalone.dataset_utils.normalizer_utils import (
 )
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
 from standalone.utils.train_utils import (
-    TRAIN_CONFIG_NAME,
-    apply_config_overrides,
     build_scheduler,
     build_optimizer,
-    serialize_config,
-    load_config_json,
     load_init_states_with_anchors,
     make_split_indices,
-    merge_config_overrides,
-    resolve_run_dir,
+    prepare_train_config,
     sample_per_anchor,
-    write_run_metadata,
 )
 
 
@@ -56,93 +45,10 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-RESUME_OVERRIDE_ALLOWLIST = [
-    "training.device",
-    "logging.use_wandb",
-    "logging.wandb_project",
-    "logging.wandb_entity",
-    "logging.experiment_name",
-]
-
-
-def reject_draccus_config() -> None:
-    """Disable YAML configs; enforce JSON/CLI overrides."""
-    config_arg = None
-    for idx, arg in enumerate(sys.argv):
-        if arg == "--config" and idx + 1 < len(sys.argv):
-            config_arg = sys.argv[idx + 1]
-            break
-        if arg.startswith("--config="):
-            config_arg = arg.split("=", 1)[1]
-            break
-    if config_arg:
-        raise ValueError(
-            "YAML configs are disabled. Use CLI overrides with dataclass defaults, "
-            "or pass saved_config_path/resume to load train_config.json."
-        )
-
-
-def apply_resume_config(cfg: TrainConfig) -> Tuple[TrainConfig, Optional[Path]]:
-    """Load and apply resume config if requested."""
-    if not getattr(cfg, "resume", False) and not getattr(cfg, "saved_config_path", None):
-        return cfg, None
-    cfg_dict = serialize_config(cfg)
-    config_path = None
-    if cfg.saved_config_path:
-        config_path = Path(cfg.saved_config_path).expanduser().resolve()
-    if config_path is None and getattr(cfg, "resume", False):
-        config_path = (
-            Path(cfg.paths.save_dir).expanduser().resolve() / TRAIN_CONFIG_NAME
-        )
-    if config_path is None:
-        return cfg, None
-    if config_path.suffix.lower() in (".yml", ".yaml"):
-        raise ValueError(
-            "YAML configs are disabled. Use train_config.json or CLI overrides."
-        )
-    if not config_path.exists():
-        if config_path.name == TRAIN_CONFIG_NAME:
-            legacy_path = config_path.with_name("config.json")
-            if legacy_path.exists():
-                config_path = legacy_path
-            else:
-                raise FileNotFoundError(f"config not found: {config_path}")
-        else:
-            raise FileNotFoundError(f"config not found: {config_path}")
-    saved_cfg = load_config_json(config_path)
-    if "saved_config_path" not in saved_cfg and "config_path" in saved_cfg:
-        saved_cfg["saved_config_path"] = saved_cfg["config_path"]
-    defaults_dict = serialize_config(TrainConfig())
-    merged_cfg = merge_config_overrides(
-        saved_cfg, cfg_dict, RESUME_OVERRIDE_ALLOWLIST, defaults=defaults_dict
-    )
-    merged_cfg["saved_config_path"] = str(config_path)
-    merged_cfg["resume"] = bool(getattr(cfg, "resume", False))
-    apply_config_overrides(cfg, merged_cfg)
-    if getattr(cfg, "resume", False):
-        cfg.paths.save_dir = str(config_path.parent)
-    return cfg, config_path
-
-
 @draccus.wrap()
 def main(cfg: TrainConfig) -> None:
-    reject_draccus_config()
-    cfg, _ = apply_resume_config(cfg)
-    apply_policy_config(cfg)
-    if not cfg.data.demo_file:
-        raise ValueError("data.demo_file is required")
+    cfg, save_dir, _ = prepare_train_config(cfg)
     set_seed(cfg.data.seed)
-
-    if cfg.resume:
-        save_dir = Path(cfg.paths.save_dir).expanduser().resolve()
-        if not save_dir.exists():
-            raise FileNotFoundError(f"resume dir not found: {save_dir}")
-        print(f"[info] resuming in {save_dir}")
-    else:
-        save_dir = resolve_run_dir(Path(cfg.paths.save_dir))
-        save_dir.mkdir(parents=True, exist_ok=True)
-        cfg.paths.save_dir = str(save_dir)
-        print(f"[info] saving to {save_dir}")
 
     wandb = None
     if cfg.logging.use_wandb:
@@ -178,18 +84,11 @@ def main(cfg: TrainConfig) -> None:
     if policy_name in ("act", "cnnmlp", "dp") and cfg.data.normalize_obs:
         print("[warn] ACT/CNNMLP/DP policy ignores obs normalization; disabling normalize_obs.")
         cfg.data.normalize_obs = False
-    if not cfg.resume:
-        cfg_dict = serialize_config(cfg)
-        if isinstance(cfg_dict, dict):
-            cfg_dict["policy"] = serialize_policy_config(cfg)
-        write_run_metadata(save_dir, cfg, cfg_dict=cfg_dict)
-
     split_path = save_dir / "split_indices.json"
 
     device = cfg.training.device if torch.cuda.is_available() else "cpu"
     val_every = int(cfg.training.val_every)
     rollout_every = int(cfg.rollout.every)
-    ckpt_mode = str(getattr(cfg.training, "ckpt_mode", "last")).lower()
     save_ckpt_every = int(getattr(cfg.training, "save_ckpt_every", 1))
     if val_every < 0:
         raise ValueError("val_every must be >= 0")
@@ -197,8 +96,6 @@ def main(cfg: TrainConfig) -> None:
         raise ValueError("rollout_every must be >= 0")
     if save_ckpt_every <= 0:
         raise ValueError("training.save_ckpt_every must be >= 1")
-    if ckpt_mode not in ("last", "best", "all"):
-        raise ValueError("training.ckpt_mode must be one of: last, best, all")
     if cfg.rollout.steps <= 0:
         raise ValueError("rollout_steps must be >= 1")
     if cfg.rollout.warmup_steps < 0:
@@ -377,22 +274,20 @@ def main(cfg: TrainConfig) -> None:
     else:
         rollout_runner = None
 
-    if ckpt_mode == "best":
-        if rollout_every <= 0 or rollout_runner is None:
-            raise ValueError("training.ckpt_mode=best requires rollout.every > 0")
-        if cfg.training.epochs < rollout_every:
-            raise ValueError(
-                "training.ckpt_mode=best requires at least one rollout; "
-                "increase epochs or reduce rollout.every"
-            )
-
-    best_rollout = None
-    best_rollout_epoch = None
     last_ckpt_path = save_dir / "model_last.pt"
-    best_ckpt_path = save_dir / "model_best.pt"
     final_ckpt_path = None
     printed_batch = False
-    last_ckpt_epoch = None
+    topk_path = save_dir / "topk.json"
+    topk_records = []
+    save_topk = int(getattr(cfg.training, "save_topk", 0) or 0)
+    if topk_path.exists():
+        try:
+            with open(topk_path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                topk_records = data
+        except Exception:
+            topk_records = []
     for epoch in range(1, cfg.training.epochs + 1):
         model.train()
         train_losses = []
@@ -472,6 +367,7 @@ def main(cfg: TrainConfig) -> None:
             avg_val = sum(val_losses) / max(len(val_losses), 1)
             print(f"[info] epoch {epoch:03d} | val loss {avg_val:.6f}")
         rollout_success = None
+        should_save = epoch % save_ckpt_every == 0
         if rollout_runner is not None and epoch % rollout_every == 0:
             rng = np.random.default_rng(cfg.data.seed + epoch)
             rollout_indices = sample_per_anchor(
@@ -507,20 +403,6 @@ def main(cfg: TrainConfig) -> None:
             )
             if rollout_details is not None:
                 rollout_success = rollout_details.get("success_rate")
-            if ckpt_mode == "best" and rollout_success is not None:
-                rollout_success = float(rollout_success)
-                if best_rollout is None or rollout_success > best_rollout:
-                    best_rollout = rollout_success
-                    best_rollout_epoch = epoch
-                    torch.save(
-                        {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
-                        best_ckpt_path,
-                    )
-                    final_ckpt_path = best_ckpt_path
-                    print(
-                        f"[info] saved best ckpt (success_rate={best_rollout:.3f}) "
-                        f"to {best_ckpt_path}"
-                    )
             if wandb is not None and rollout_details is not None:
                 anchor_counts = defaultdict(int)
                 anchor_success = defaultdict(int)
@@ -552,50 +434,61 @@ def main(cfg: TrainConfig) -> None:
                 log_data["val/loss"] = avg_val
             wandb.log(log_data, step=epoch)
 
-        if ckpt_mode == "all" and epoch % save_ckpt_every == 0:
-            ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
-            torch.save(
-                {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
-                ckpt_path,
-            )
-            final_ckpt_path = ckpt_path
-            last_ckpt_epoch = epoch
-        elif ckpt_mode == "last":
+        if should_save:
             torch.save(
                 {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
                 last_ckpt_path,
             )
             final_ckpt_path = last_ckpt_path
-
-    if ckpt_mode == "all" and last_ckpt_epoch != cfg.training.epochs:
-        epoch = cfg.training.epochs
-        ckpt_path = save_dir / f"model_epoch_{epoch:03d}.pt"
-        torch.save(
-            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
-            ckpt_path,
-        )
-        final_ckpt_path = ckpt_path
-
-    if ckpt_mode == "best" and best_rollout is None:
-        print(
-            "[warning] no rollout success_rate observed; "
-            "saving final model as model_best.pt"
-        )
-        torch.save(
-            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
-            best_ckpt_path,
-        )
-        final_ckpt_path = best_ckpt_path
+            if (
+                save_topk > 0
+                and rollout_success is not None
+                and rollout_every > 0
+            ):
+                score = float(rollout_success)
+                topk_records = [
+                    r for r in topk_records if Path(r.get("path", "")).exists()
+                ]
+                if len(topk_records) < save_topk:
+                    ckpt_path = save_dir / f"model_topk_epoch_{epoch:03d}.pt"
+                    torch.save(
+                        {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                        ckpt_path,
+                    )
+                    topk_records.append(
+                        {"epoch": epoch, "success_rate": score, "path": str(ckpt_path)}
+                    )
+                else:
+                    worst_idx = min(
+                        range(len(topk_records)),
+                        key=lambda i: float(topk_records[i].get("success_rate", -1e9)),
+                    )
+                    worst_score = float(topk_records[worst_idx].get("success_rate", -1e9))
+                    if score > worst_score:
+                        worst_path = topk_records[worst_idx].get("path")
+                        if worst_path and Path(worst_path).exists():
+                            Path(worst_path).unlink()
+                        ckpt_path = save_dir / f"model_topk_epoch_{epoch:03d}.pt"
+                        torch.save(
+                            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                            ckpt_path,
+                        )
+                        topk_records[worst_idx] = {
+                            "epoch": epoch,
+                            "success_rate": score,
+                            "path": str(ckpt_path),
+                        }
+                topk_records = sorted(
+                    topk_records, key=lambda r: float(r.get("success_rate", -1e9)), reverse=True
+                )
+                with open(topk_path, "w") as f:
+                    json.dump(topk_records, f, indent=2)
 
     if final_ckpt_path is not None:
         print(f"[info] finished training. ckpt saved to {final_ckpt_path}")
     else:
         print("[info] finished training. no checkpoint saved")
     if wandb is not None:
-        if best_rollout is not None:
-            wandb.run.summary["best_rollout_success"] = best_rollout
-            if best_rollout_epoch is not None:
-                wandb.run.summary["best_rollout_epoch"] = best_rollout_epoch
         if final_ckpt_path is not None:
             wandb.run.summary["ckpt_path"] = str(final_ckpt_path)
         wandb.finish()
