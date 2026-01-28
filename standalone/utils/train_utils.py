@@ -418,7 +418,7 @@ def build_optimizer(
 
 def build_scheduler(
     cfg: Any, optimizer: torch.optim.Optimizer, policy_name: str, total_steps: int
-) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
+) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
     """Build a learning rate scheduler. Returns None when disabled."""
     base_cfg = getattr(cfg.training, "scheduler", None)
     policy_cfg = _get_policy_scheduler_cfg(cfg, policy_name)
