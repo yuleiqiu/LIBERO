@@ -36,6 +36,7 @@ from standalone.models.policy.policy_factory import build_policy, get_policy_nam
 from standalone.utils.train_utils import (
     TRAIN_CONFIG_NAME,
     apply_config_overrides,
+    build_scheduler,
     build_optimizer,
     serialize_config,
     load_config_json,
@@ -336,6 +337,8 @@ def main(cfg: TrainConfig) -> None:
         model.set_normalizer(dp_normalizer)
     model.to(device)
     optimizer = build_optimizer(cfg, model, policy_name)
+    total_steps = int(cfg.training.epochs) * max(len(train_loader), 1)
+    scheduler = build_scheduler(cfg, optimizer, policy_name, total_steps)
     def _model_state_for_ckpt():
         state = model.state_dict()
         if policy_name == "dp":
@@ -437,6 +440,8 @@ def main(cfg: TrainConfig) -> None:
             if cfg.training.grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.training.grad_clip)
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
             train_losses.append(loss.item())
             if stats:
                 for key, value in stats.items():

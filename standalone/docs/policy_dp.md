@@ -60,7 +60,13 @@ flowchart LR
 - `policy.dp.model.n_groups`
 - `policy.dp.model.do_mask_loss_for_padding=true/false`
 
-### 3.4 Noise Scheduler
+### 3.4 LR Scheduler (optional)
+- `policy.dp.scheduler.name` (`none` | `cosine` | `linear` | `constant`)
+- `policy.dp.scheduler.warmup_steps`
+- `policy.dp.scheduler.num_training_steps` (optional override)
+- `policy.dp.scheduler.min_lr` (optional)
+
+### 3.5 Noise Scheduler
 - `policy.dp.model.noise_scheduler_type=DDPM|DDIM`
 - `policy.dp.model.num_train_timesteps`
 - `policy.dp.model.beta_schedule`
@@ -71,7 +77,7 @@ flowchart LR
 - `policy.dp.model.clip_sample_range`
 - `policy.dp.model.num_inference_steps` (optional)
 
-### 3.5 Normalizer (DP only)
+### 3.6 Normalizer (DP only)
 - `policy.dp.normalizer.enable`
 - `policy.dp.normalizer.normalize_obs`
 - `policy.dp.normalizer.normalize_actions`

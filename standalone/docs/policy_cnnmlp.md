@@ -48,6 +48,12 @@ flowchart LR
 ### 3.3 CNNMLP Training
 - `policy.cnnmlp.lr_backbone`
 
+### 3.4 LR Scheduler (optional)
+- `policy.cnnmlp.scheduler.name` (`none` | `cosine` | `linear` | `constant`)
+- `policy.cnnmlp.scheduler.warmup_steps`
+- `policy.cnnmlp.scheduler.num_training_steps` (optional override)
+- `policy.cnnmlp.scheduler.min_lr` (optional)
+
 ## 4. CLI Example (CNNMLP)
 
 ```bash

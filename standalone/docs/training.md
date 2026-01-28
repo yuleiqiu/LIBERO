@@ -82,6 +82,8 @@ Train config fields (grouped):
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
 - `training.val_every`, `training.grad_clip`, `training.device`: validation cadence, grad clip, device.
 - `training.ckpt_mode`: checkpoint saving policy (`last`, `best`, or `all`).
+- `training.scheduler.*`: optional global LR scheduler defaults (overridden by policy schedulers).
+- `policy.<name>.scheduler.*`: optional per-policy LR scheduler settings (see below).
 - `rollout.every`: training-time rollout interval (0 disables rollouts).
 - `rollout.init_states_dir`: init states root (falls back to LIBERO default if unset).
 - `rollout.env_horizon`: environment horizon used during training rollouts.
@@ -136,6 +138,26 @@ Each run directory stores:
   and `saved_config_path` alone can be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`
   is missing, it falls back to the legacy `config.json`.
+
+## LR Scheduler (per policy)
+
+Schedulers are optional and configured per policy. If `policy.<name>.scheduler.name` is `"none"`,
+no scheduler is used.
+
+Supported:
+- `name`: `none` | `cosine` | `linear` | `constant`
+- `warmup_steps`: number of warmup steps before decay
+- `num_training_steps`: override total training steps (optional)
+- `min_lr`: lower bound on learning rate (optional)
+
+Example:
+
+```bash
+python standalone/train.py \
+  --policy.name=dp \
+  --policy.dp.scheduler.name=cosine \
+  --policy.dp.scheduler.warmup_steps=500
+```
 
 ## Image augmentation
 

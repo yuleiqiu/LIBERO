@@ -21,7 +21,6 @@ class DiffusionPolicy(ChunkPolicy):
         encoder_config=None,
         obs_encoder=None,
         dp_config=None,
-        noise_scheduler=None,
     ):
         super().__init__(predict_horizon=predict_horizon, exec_horizon=exec_horizon)
         self.obs_keys = list(obs_keys) if obs_keys is not None else []
@@ -45,20 +44,19 @@ class DiffusionPolicy(ChunkPolicy):
         n_action_steps = int(cfg.pop("n_action_steps", self.predict_horizon))
         n_obs_steps = int(cfg.pop("n_obs_steps", self.obs_horizon))
 
-        if noise_scheduler is None:
-            noise_scheduler_type = str(cfg.pop("noise_scheduler_type", "DDPM"))
-            scheduler_cls = {"DDPM": DDPMScheduler, "DDIM": DDIMScheduler}.get(noise_scheduler_type)
-            if scheduler_cls is None:
-                raise ValueError(f"unsupported noise_scheduler_type: {noise_scheduler_type}")
-            noise_scheduler = scheduler_cls(
-                num_train_timesteps=int(cfg.pop("num_train_timesteps", 100)),
-                beta_start=float(cfg.pop("beta_start", 0.0001)),
-                beta_end=float(cfg.pop("beta_end", 0.02)),
-                beta_schedule=str(cfg.pop("beta_schedule", "squaredcos_cap_v2")),
-                prediction_type=str(cfg.pop("prediction_type", "epsilon")),
-                clip_sample=bool(cfg.pop("clip_sample", True)),
-                clip_sample_range=float(cfg.pop("clip_sample_range", 1.0)),
-            )
+        noise_scheduler_type = str(cfg.pop("noise_scheduler_type", "DDPM"))
+        scheduler_cls = {"DDPM": DDPMScheduler, "DDIM": DDIMScheduler}.get(noise_scheduler_type)
+        if scheduler_cls is None:
+            raise ValueError(f"unsupported noise_scheduler_type: {noise_scheduler_type}")
+        noise_scheduler = scheduler_cls(
+            num_train_timesteps=int(cfg.pop("num_train_timesteps", 100)),
+            beta_start=float(cfg.pop("beta_start", 0.0001)),
+            beta_end=float(cfg.pop("beta_end", 0.02)),
+            beta_schedule=str(cfg.pop("beta_schedule", "squaredcos_cap_v2")),
+            prediction_type=str(cfg.pop("prediction_type", "epsilon")),
+            clip_sample=bool(cfg.pop("clip_sample", True)),
+            clip_sample_range=float(cfg.pop("clip_sample_range", 1.0)),
+        )
 
         self.diffusion_model = DiffusionModel(
             shape_meta=shape_meta,

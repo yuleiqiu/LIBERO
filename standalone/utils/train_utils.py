@@ -1,4 +1,5 @@
 import copy
+import math
 import json
 import re
 import shlex
@@ -259,6 +260,17 @@ def _get_policy_optimizer_cfg(cfg: Any, policy_name: str) -> Any:
     return None
 
 
+def _get_policy_scheduler_cfg(cfg: Any, policy_name: str) -> Any:
+    """Return the scheduler config for a policy name."""
+    if policy_name == "act":
+        return getattr(cfg.policy.act, "scheduler", None)
+    if policy_name == "cnnmlp":
+        return getattr(cfg.policy.cnnmlp, "scheduler", None)
+    if policy_name == "dp":
+        return getattr(cfg.policy.dp, "scheduler", None)
+    return None
+
+
 def build_optimizer(
     cfg: Any, model: torch.nn.Module, policy_name: str
 ) -> torch.optim.Optimizer:
@@ -307,3 +319,48 @@ def build_optimizer(
         betas=tuple(betas),
         eps=eps,
     )
+
+
+def build_scheduler(
+    cfg: Any, optimizer: torch.optim.Optimizer, policy_name: str, total_steps: int
+) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
+    """Build a learning rate scheduler. Returns None when disabled."""
+    base_cfg = getattr(cfg.training, "scheduler", None)
+    policy_cfg = _get_policy_scheduler_cfg(cfg, policy_name)
+    name = str(_resolve_opt_value(base_cfg, policy_cfg, "name", "none") or "none").lower()
+    if name in ("none", "null", "disable", "disabled"):
+        return None
+    warmup_steps = int(_resolve_opt_value(base_cfg, policy_cfg, "warmup_steps", 0) or 0)
+    min_lr = float(_resolve_opt_value(base_cfg, policy_cfg, "min_lr", 0.0) or 0.0)
+    max_steps = _resolve_opt_value(base_cfg, policy_cfg, "num_training_steps", None)
+    max_steps = int(max_steps) if max_steps is not None else int(total_steps)
+    if max_steps <= 0:
+        return None
+
+    base_lrs = [group["lr"] for group in optimizer.param_groups]
+
+    def _schedule(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return float(step + 1) / float(max(warmup_steps, 1))
+        progress = (step - warmup_steps) / float(max(max_steps - warmup_steps, 1))
+        progress = min(max(progress, 0.0), 1.0)
+        if name == "linear":
+            return 1.0 - progress
+        if name == "cosine":
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+        if name == "constant":
+            return 1.0
+        raise ValueError(f"unsupported scheduler name: {name}")
+
+    if min_lr > 0.0:
+        min_factors = [
+            (min_lr / lr) if lr > 0 else 0.0 for lr in base_lrs
+        ]
+
+        def _make_lambda(min_factor: float):
+            return lambda step: max(min_factor, _schedule(step))
+
+        lr_lambdas = [_make_lambda(mf) for mf in min_factors]
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambdas)
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_schedule)

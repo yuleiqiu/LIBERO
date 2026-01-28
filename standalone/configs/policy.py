@@ -54,6 +54,15 @@ class AdamWOptimizerConfig:
 
 
 @dataclass
+class SchedulerConfig:
+    """Learning rate scheduler settings."""
+    name: str = "none"
+    warmup_steps: int = 0
+    num_training_steps: Optional[int] = None
+    min_lr: float = 0.0
+
+
+@dataclass
 class ACTConfig:
     exec_horizon: Optional[int] = None
     lr_backbone: float = 1e-5
@@ -61,6 +70,7 @@ class ACTConfig:
     temporal_ensemble_coeff: Optional[float] = None
     model: ACTModelConfig = field(default_factory=ACTModelConfig)
     optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     def act_config_dict(self):
         """Return ACT policy config; drop runtime/training-only keys."""
@@ -90,6 +100,7 @@ class CNNMLPConfig:
     lr_backbone: float = 1e-5
     model: CNNMLPModelConfig = field(default_factory=CNNMLPModelConfig)
     optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     def cnnmlp_config_dict(self):
         data = asdict(self)
@@ -121,7 +132,6 @@ class DiffusionModelConfig:
     clip_sample: bool = True
     clip_sample_range: float = 1.0
     do_mask_loss_for_padding: bool = False
-    noise_scheduler: Dict[str, Any] = field(default_factory=dict)
 
     def dp_config_dict(self):
         data = asdict(self)
@@ -135,6 +145,7 @@ class DiffusionConfig:
     model: DiffusionModelConfig = field(default_factory=DiffusionModelConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
     optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     def dp_config_dict(self):
         data = self.model.dp_config_dict()

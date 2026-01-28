@@ -56,6 +56,12 @@ flowchart LR
 - `policy.act.lr_backbone`
 - `policy.act.temporal_ensemble_coeff` (optional; enables temporal ensembling in inference)
 
+### 3.4 LR Scheduler (optional)
+- `policy.act.scheduler.name` (`none` | `cosine` | `linear` | `constant`)
+- `policy.act.scheduler.warmup_steps`
+- `policy.act.scheduler.num_training_steps` (optional override)
+- `policy.act.scheduler.min_lr` (optional)
+
 ## 4. CLI Example (ACT)
 
 ```bash

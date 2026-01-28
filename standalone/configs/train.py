@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from standalone.configs.data import DataConfig
-from standalone.configs.policy import AdamWOptimizerConfig, PolicyConfig
+from standalone.configs.policy import AdamWOptimizerConfig, PolicyConfig, SchedulerConfig
 
 
 @dataclass
@@ -19,10 +19,13 @@ class TrainLoopConfig:
     optimizer: AdamWOptimizerConfig = field(
         default_factory=lambda: AdamWOptimizerConfig(
             lr=1e-4,
-            weight_decay=1e-4,
+            weight_decay=1e-6,
             betas=[0.9, 0.999],
             eps=1e-8,
         )
+    )
+    scheduler: SchedulerConfig = field(
+        default_factory=lambda: SchedulerConfig(name="cosine", warmup_steps=500)
     )
     grad_clip: Optional[float] = None
     device: str = "cuda:0"
