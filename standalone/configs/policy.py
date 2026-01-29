@@ -114,9 +114,9 @@ class CNNMLPConfig:
 
 @dataclass
 class DiffusionModelConfig:
-    horizon: Optional[int] = None
-    n_action_steps: Optional[int] = None
-    n_obs_steps: Optional[int] = None
+    horizon: Optional[int] = 16
+    n_action_steps: Optional[int] = 8
+    n_obs_steps: Optional[int] = 2
     num_inference_steps: Optional[int] = None
     diffusion_step_embed_dim: int = 128
     down_dims: List[int] = field(default_factory=lambda: [512, 1024, 2048])
@@ -141,6 +141,9 @@ class DiffusionModelConfig:
 @dataclass
 class DiffusionConfig:
     exec_horizon: Optional[int] = None
+    # DP-only data slicing controls (leave None to use defaults in train.py)
+    action_horizon: Optional[int] = None
+    action_start_offset: Optional[int] = None
     encoder: ObsEncoderConfig = field(default_factory=ObsEncoderConfig)
     model: DiffusionModelConfig = field(default_factory=DiffusionModelConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)

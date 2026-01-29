@@ -70,6 +70,17 @@ def compute_linear_stats(
 
             if include_actions:
                 actions = np.asarray(sample[action_key], dtype=np.float32)
+                action_mask = sample.get("action_mask")
+                if action_mask is not None:
+                    action_mask = np.asarray(action_mask).astype(bool)
+                    if action_mask.shape[0] == actions.shape[0]:
+                        actions = actions[action_mask]
+                    else:
+                        raise ValueError(
+                            f"action_mask shape {action_mask.shape} does not match actions {actions.shape}"
+                        )
+                if actions.size == 0:
+                    continue
                 flat = _flatten_last_dims(actions, last_n_dims)
                 if "action" not in stats:
                     stats["action"] = _init_stats(flat.shape[1])
