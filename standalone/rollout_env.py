@@ -433,8 +433,10 @@ def run_env_rollouts(
         env_args["horizon"] = env_horizon
         min_needed = int(getattr(cfg, "steps", 0)) + int(getattr(cfg, "warmup_steps", 0))
         if env_horizon < min_needed:
+            env_horizon = min_needed + 1
+            env_args["horizon"] = env_horizon
             print(
-                "[warning] env_horizon < steps+warmup_steps; rollout may terminate early"
+                "[info] env_horizon < steps+warmup_steps; bumping horizon to steps+warmup_steps+1"
             )
     if image_keys:
         if cam_hw is None:
@@ -786,6 +788,10 @@ def run_env_rollouts(
 
             if all(dones[:remaining]) and (not video_writer or not any(record_active[:remaining])):
                 break
+
+        incomplete = remaining - sum(1 for d in dones[:remaining] if d)
+        if incomplete > 0:
+            pbar.update(incomplete)
 
         successes += sum(1 for d in dones[:remaining] if d)
         episodes_done += remaining
