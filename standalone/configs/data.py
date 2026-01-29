@@ -62,6 +62,7 @@ class DataConfig:
     image_keys: str = "agentview_rgb,eye_in_hand_rgb"
     obs_horizon: int = 1
     predict_horizon: int = 1
+    sync_horizons_from_policy: bool = False
     action_shift: int = 0  # Offset actions relative to obs; 1 means predict next-step actions.
     image_norm: str = "none"
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)

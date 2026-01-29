@@ -113,12 +113,33 @@ def main(cfg: TrainConfig) -> None:
                 "training.save_topk requires save_ckpt_every to be a multiple of rollout.every"
             )
 
+    dp_action_horizon = None
+    dp_action_start_offset = None
+    if policy_name == "dp":
+        dp_cfg = cfg.policy.dp
+        dp_action_horizon = dp_cfg.action_horizon
+        if dp_action_horizon is None:
+            dp_action_horizon = getattr(dp_cfg.model, "horizon", None)
+        dp_action_start_offset = dp_cfg.action_start_offset
+        if dp_action_start_offset is None and dp_action_horizon is not None:
+            dp_action_start_offset = -(cfg.data.obs_horizon - 1)
+        if dp_action_horizon is not None and dp_action_horizon <= 0:
+            raise ValueError("dp.action_horizon must be >= 1")
+        if (dp_action_horizon is not None) or (dp_action_start_offset not in (None, 0)):
+            if not getattr(dp_cfg.model, "do_mask_loss_for_padding", False):
+                print(
+                    "[info] enabling dp.model.do_mask_loss_for_padding for padded action segments."
+                )
+                dp_cfg.model.do_mask_loss_for_padding = True
+
     base_dataset = HDF5SequenceDataset(
         hdf5_path=str(demo_path),
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
         action_shift=getattr(cfg.data, "action_shift", 0),
+        action_horizon=dp_action_horizon,
+        action_start_offset=dp_action_start_offset,
         image_keys=image_keys,
         image_norm=cfg.data.image_norm,
         image_transforms=cfg.data.image_transforms,

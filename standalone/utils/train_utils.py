@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from standalone.configs import TrainConfig, apply_policy_config, serialize_policy_config
+from standalone.configs.data import DataConfig
 
 TRAIN_CONFIG_NAME = "train_config.json"
 _RUN_DIR_PATTERN = re.compile(r"^run_(\d+)$")
@@ -182,6 +183,23 @@ def prepare_train_config(cfg: TrainConfig) -> Tuple[TrainConfig, Path, Optional[
     reject_draccus_config()
     cfg, config_path = apply_resume_config(cfg)
     apply_policy_config(cfg)
+    if getattr(cfg.data, "sync_horizons_from_policy", False):
+        policy_name = str(getattr(cfg.policy, "name", "")).lower()
+        if policy_name == "dp":
+            data_defaults = DataConfig()
+            dp_model = getattr(cfg.policy, "dp", None)
+            dp_model = getattr(dp_model, "model", None)
+            if dp_model is not None:
+                if (
+                    cfg.data.obs_horizon == data_defaults.obs_horizon
+                    and getattr(dp_model, "n_obs_steps", None) is not None
+                ):
+                    cfg.data.obs_horizon = int(dp_model.n_obs_steps)
+                if (
+                    cfg.data.predict_horizon == data_defaults.predict_horizon
+                    and getattr(dp_model, "n_action_steps", None) is not None
+                ):
+                    cfg.data.predict_horizon = int(dp_model.n_action_steps)
     if not cfg.data.demo_file:
         raise ValueError("data.demo_file is required")
 

@@ -40,9 +40,22 @@ python standalone/train.py \
   --policy.dp.model.horizon=16 \
   --policy.dp.model.n_obs_steps=2 \
   --policy.dp.model.n_action_steps=8 \
+  --policy.dp.action_horizon=16 \
   --policy.dp.model.noise_scheduler_type=DDPM \
   --policy.dp.model.do_mask_loss_for_padding=true \
   --paths.save_dir=standalone/standalone_runs/train_dp_quickcheck
+```
+
+DP alignment example (obs=2, action=8, horizon=16 with masked padding):
+
+```bash
+python standalone/train.py \
+  --policy.name=dp \
+  --data.sync_horizons_from_policy=true \
+  --policy.dp.model.n_obs_steps=2 \
+  --policy.dp.model.n_action_steps=8 \
+  --policy.dp.model.horizon=16 \
+  --policy.dp.action_horizon=16
 ```
 
 Resume or reproduce from a saved config:
@@ -66,17 +79,23 @@ Train config fields (grouped):
 - `data.demo_file`: path to the HDF5 demo file.
 - `data.obs_keys` / `data.image_keys`: comma-separated keys from the dataset.
 - `data.obs_horizon`, `data.predict_horizon`: temporal window sizes.
+- `data.sync_horizons_from_policy`: when `true`, and only if `data.obs_horizon` /
+  `data.predict_horizon` are still at their dataclass defaults, they are synced from
+  `policy.dp.model.n_obs_steps` / `policy.dp.model.n_action_steps`.
 - `data.action_shift`: action offset relative to observations.
 - `data.image_norm`: image normalization (`none`, `scale_0_1`, or `imagenet`).
 - `data.image_transforms.*`: optional image augmentation settings.
 - `data.normalize_obs`, `data.obs_stats_path`: observation normalization settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
-- `policy.name`: policy type (`act` or `cnnmlp`).
+- `policy.name`: policy type (`act`, `cnnmlp`, or `dp`).
 - `policy.act.model.*`: ACT model overrides (e.g., `policy.act.model.enc_layers`).
 - `policy.act.kl_weight`, `policy.act.lr_backbone`: ACT wrapper settings.
 - `policy.cnnmlp.model.*`: CNNMLP model overrides.
 - `policy.cnnmlp.lr_backbone`: CNNMLP wrapper settings.
+- `policy.dp.action_horizon`: DP-only action slicing length for training data (optional).
+- `policy.dp.action_start_offset`: DP-only action slicing offset (optional); if unset and
+  `action_horizon` is provided, defaults to `-(data.obs_horizon - 1)`.
 - `resume`, `saved_config_path`: resume from an existing run config (JSON).
 - `paths.save_dir`: base directory for run outputs (see below).
 - `training.batch_size`, `training.lr`, `training.epochs`: core optimization settings.
@@ -122,6 +141,10 @@ Each run directory stores:
 - ACT/CNNMLP ignore observation normalization; `normalize_obs` is disabled
   automatically for these policies.
 - Image normalization is applied in the dataset via `data.image_norm`.
+- DP action slicing: when `policy.dp.action_horizon` (or `policy.dp.action_start_offset`)
+  is set, the dataset pads action sequences and exposes `action_mask`. Training
+  will enable `policy.dp.model.do_mask_loss_for_padding` automatically if needed,
+  and action normalization ignores masked padding.
 - Validation loss is logged every `training.val_every` epochs; only the loss is tracked
   (no best-val selection or extra val stats). `split_indices.json` still records the
   train/val split from `data.train_ratio`/`data.val_ratio`.

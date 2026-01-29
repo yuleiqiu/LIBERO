@@ -19,6 +19,8 @@ class HDF5SequenceDataset(Dataset):
         obs_horizon=1,
         predict_horizon=1,
         action_shift=0,
+        action_horizon=None,
+        action_start_offset=None,
         action_key="actions",
         demos=None,
         obs_stats=None,
@@ -33,6 +35,10 @@ class HDF5SequenceDataset(Dataset):
         self.action_shift = int(action_shift)
         if self.action_shift < 0:
             raise ValueError("action_shift must be >= 0")
+        self.action_horizon = int(action_horizon) if action_horizon is not None else None
+        self.action_start_offset = (
+            int(action_start_offset) if action_start_offset is not None else None
+        )
         self.action_key = action_key
         self._h5 = None
         self._indices = []
@@ -126,18 +132,35 @@ class HDF5SequenceDataset(Dataset):
             obs[key] = arr
 
         action_start = t + self.action_shift
-        actions = demo_group[self.action_key][
-            action_start : action_start + self.predict_horizon
-        ].astype(np.float32)
+        action_horizon = self.predict_horizon
+        if self.action_horizon is not None:
+            action_horizon = self.action_horizon
+        if self.action_start_offset is not None:
+            action_start = action_start + self.action_start_offset
+        action_end = action_start + action_horizon
+
+        base_action_dim = demo_group[self.action_key].shape[1]
+        pad_front = max(0, -action_start)
+        pad_front = min(pad_front, action_horizon)
+        slice_start = max(0, action_start)
+        slice_end = max(0, action_end)
+        actions = demo_group[self.action_key][slice_start:slice_end].astype(np.float32)
+        max_valid = max(0, action_horizon - pad_front)
+        if actions.shape[0] > max_valid:
+            actions = actions[:max_valid]
         valid_len = actions.shape[0]
-        action_mask = np.zeros((self.predict_horizon,), dtype=np.float32)
-        action_mask[:valid_len] = 1.0
-        if valid_len < self.predict_horizon:
-            pad = np.zeros(
-                (self.predict_horizon - valid_len, actions.shape[1]),
-                dtype=np.float32,
-            )
-            actions = np.concatenate([actions, pad], axis=0)
+        pad_back = action_horizon - (pad_front + valid_len)
+
+        if pad_front > 0:
+            front = np.zeros((pad_front, base_action_dim), dtype=np.float32)
+            actions = np.concatenate([front, actions], axis=0)
+        if pad_back > 0:
+            back = np.zeros((pad_back, base_action_dim), dtype=np.float32)
+            actions = np.concatenate([actions, back], axis=0)
+
+        action_mask = np.zeros((action_horizon,), dtype=np.float32)
+        if valid_len > 0:
+            action_mask[pad_front : pad_front + valid_len] = 1.0
 
         if self._obs_stats is not None:
             for key, value in obs.items():
