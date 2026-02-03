@@ -24,3 +24,11 @@ class RolloutConfig:
     video_fps: int = 30
     video_dir: str = ""
     device: str = "cuda:0"
+
+
+@dataclass
+class SegRolloutConfig(RolloutConfig):
+    seg_mode: str = "hard"
+    seg_fill_value: float = 0.0
+    seg_blur_ksize: int = 11
+    seg_blur_sigma: float = 5.0

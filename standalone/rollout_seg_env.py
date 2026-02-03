@@ -16,7 +16,8 @@ import cv2
 from libero.libero.envs import SegmentationRenderEnv, SubprocVectorEnv
 from libero.libero.utils.video_utils import VideoWriter
 
-from standalone.configs import RolloutConfig, apply_policy_config
+from standalone.configs import apply_policy_config
+from standalone.configs.rollout import SegRolloutConfig
 from standalone.rollout_env import (
     ObsHistory,
     _derive_eval_video_dir,
@@ -48,8 +49,8 @@ from standalone.models.policy.policy_factory import build_policy, get_policy_nam
 
 def _segmentation_key(env_key: str) -> str:
     if env_key.endswith("_image"):
-        return f"{env_key[: -len('_image')]}_segmentation"
-    return f"{env_key}_segmentation"
+        return f"{env_key[: -len('_image')]}_segmentation_instance"
+    return f"{env_key}_segmentation_instance"
 
 
 def _ensure_video_camera(
@@ -674,7 +675,7 @@ def run_env_rollouts(
 
 
 @draccus.wrap()
-def main(cfg: RolloutConfig):
+def main(cfg: SegRolloutConfig):
     if not cfg.ckpt:
         raise ValueError("ckpt is required")
     ckpt_path = Path(cfg.ckpt).expanduser().resolve()
