@@ -32,3 +32,4 @@ class SegRolloutConfig(RolloutConfig):
     seg_fill_value: float = 0.0
     seg_blur_ksize: int = 11
     seg_blur_sigma: float = 5.0
+    video_show_masks: bool = False

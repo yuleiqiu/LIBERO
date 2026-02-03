@@ -54,6 +54,35 @@ def parse_args():
         action="store_true",
         help="Visualize get_segmentation_of_interest() mask instead of raw instances.",
     )
+    parser.add_argument(
+        "--apply-mask",
+        action="store_true",
+        help="Apply segmentation-of-interest mask to the original image.",
+    )
+    parser.add_argument(
+        "--seg-mode",
+        default="hard",
+        choices=["hard", "soft"],
+        help="Masking mode when --apply-mask is set.",
+    )
+    parser.add_argument(
+        "--seg-fill-value",
+        type=float,
+        default=0.0,
+        help="Fill value for hard masking.",
+    )
+    parser.add_argument(
+        "--seg-blur-ksize",
+        type=int,
+        default=11,
+        help="Gaussian blur kernel size for soft masking.",
+    )
+    parser.add_argument(
+        "--seg-blur-sigma",
+        type=float,
+        default=5.0,
+        help="Gaussian blur sigma for soft masking.",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +112,75 @@ def _output_for_camera(base_path: Path, camera_name: str, multiple: bool) -> Pat
     if base_path.suffix:
         return base_path.with_name(f"{base_path.stem}_{camera_name}{base_path.suffix}")
     return base_path / f"seg_vis_{camera_name}.png"
+
+
+def _infer_layout(img: np.ndarray) -> str:
+    if img.ndim == 2:
+        return "hw"
+    if img.ndim != 3:
+        raise ValueError(f"unsupported image shape: {img.shape}")
+    if img.shape[-1] in (1, 3, 4):
+        return "hwc"
+    if img.shape[0] in (1, 3, 4):
+        return "chw"
+    raise ValueError(f"cannot infer image layout from shape: {img.shape}")
+
+
+def _to_hwc(img: np.ndarray, layout: str) -> np.ndarray:
+    if layout == "hwc":
+        return img
+    if layout == "chw":
+        return np.transpose(img, (1, 2, 0))
+    if layout == "hw":
+        return img[..., None]
+    raise ValueError(f"unknown layout: {layout}")
+
+
+def _from_hwc(img: np.ndarray, layout: str) -> np.ndarray:
+    if layout == "hwc":
+        return img
+    if layout == "chw":
+        return np.transpose(img, (2, 0, 1))
+    if layout == "hw":
+        return img[..., 0]
+    raise ValueError(f"unknown layout: {layout}")
+
+
+def _apply_mask_image(
+    image: np.ndarray,
+    mask: np.ndarray,
+    mode: str,
+    fill_value: float,
+    blur_ksize: int,
+    blur_sigma: float,
+) -> np.ndarray:
+    layout = _infer_layout(image)
+    img_hwc = _to_hwc(image, layout)
+
+    img_dtype = img_hwc.dtype
+    img = img_hwc.astype(np.float32)
+    mask = mask.astype(np.float32)
+    if mask.ndim == 2:
+        mask = mask[..., None]
+
+    if mode == "hard":
+        out = img * mask + (1.0 - mask) * float(fill_value)
+    elif mode == "soft":
+        k = int(blur_ksize)
+        if k % 2 == 0:
+            k += 1
+        blurred = cv2.GaussianBlur(img, (k, k), float(blur_sigma))
+        out = img * mask + (1.0 - mask) * blurred
+    else:
+        raise ValueError(f"unknown seg_mode: {mode}")
+
+    if np.issubdtype(img_dtype, np.integer):
+        out = np.clip(out, 0, 255)
+        out = out.astype(img_dtype)
+    else:
+        out = out.astype(img_dtype)
+
+    return _from_hwc(out, layout)
 
 
 def main():
@@ -134,7 +232,20 @@ def main():
                     f"available segmentation keys: {available}"
                 )
             seg = np.squeeze(obs[seg_key])
-            if args.interest_only:
+            if args.apply_mask:
+                if env_key not in obs:
+                    raise KeyError(f"image key not found: {env_key}")
+                seg_mask = np.squeeze(env.get_segmentation_of_interest(seg))
+                mask = (np.squeeze(seg_mask) == 1).astype(np.float32)
+                rgb = _apply_mask_image(
+                    obs[env_key],
+                    mask,
+                    mode=args.seg_mode,
+                    fill_value=args.seg_fill_value,
+                    blur_ksize=args.seg_blur_ksize,
+                    blur_sigma=args.seg_blur_sigma,
+                )
+            elif args.interest_only:
                 mask = np.squeeze(env.get_segmentation_of_interest(seg))
                 rgb = np.zeros(mask.shape + (3,), dtype=np.uint8)
                 rgb[mask == 1] = (255, 0, 0)
@@ -143,8 +254,13 @@ def main():
             output_path = _output_for_camera(base_output, cam_name, multiple)
             if not output_path.suffix:
                 output_path = output_path.with_suffix(".png")
+            layout = _infer_layout(rgb)
+            rgb = _to_hwc(rgb, layout)
             rgb = rgb[::-1]
-            cv2.imwrite(str(output_path), rgb[..., ::-1])
+            if rgb.shape[-1] == 1:
+                cv2.imwrite(str(output_path), rgb[..., 0])
+            else:
+                cv2.imwrite(str(output_path), rgb[..., ::-1])
             print(f"[info] saved segmentation to {output_path}")
     finally:
         env.close()

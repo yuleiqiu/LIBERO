@@ -142,6 +142,102 @@ def _apply_mask_image(
     return _from_hwc(out, layout, orig_layout)
 
 
+def _to_uint8_image(img: np.ndarray) -> np.ndarray:
+    if img.dtype == np.uint8:
+        return img
+    arr = img.astype(np.float32)
+    if np.issubdtype(arr.dtype, np.floating) and arr.max() <= 1.0:
+        arr = arr * 255.0
+    arr = np.clip(arr, 0, 255)
+    return arr.astype(np.uint8)
+
+
+def _ensure_rgb(img: np.ndarray) -> np.ndarray:
+    layout = _infer_layout(img)
+    img_hwc, _ = _to_hwc(img, layout)
+    if img_hwc.shape[-1] == 1:
+        img_hwc = np.repeat(img_hwc, 3, axis=-1)
+    return _to_uint8_image(img_hwc)
+
+
+def _build_mask_grid(
+    env_obs: Mapping[str, Any],
+    env: Any,
+    camera_names: Sequence[str],
+    mode: str,
+    fill_value: float,
+    blur_ksize: int,
+    blur_sigma: float,
+) -> Optional[np.ndarray]:
+    rows = []
+    missing = []
+    for cam in camera_names:
+        if cam not in env_obs:
+            missing.append(cam)
+            continue
+        seg_key = _segmentation_key(cam)
+        if seg_key not in env_obs:
+            missing.append(seg_key)
+            continue
+        seg_img = np.squeeze(env_obs[seg_key])
+        if isinstance(env, SubprocVectorEnv):
+            seg_mask_list = env.get_segmentation_of_interest([seg_img])
+            seg_mask = seg_mask_list[0]
+        else:
+            seg_mask = env.get_segmentation_of_interest(seg_img)
+        mask = (np.squeeze(seg_mask) == 1).astype(np.float32)
+        masked = _apply_mask_image(
+            env_obs[cam],
+            mask,
+            mode=mode,
+            fill_value=fill_value,
+            blur_ksize=blur_ksize,
+            blur_sigma=blur_sigma,
+        )
+        orig_rgb = _ensure_rgb(env_obs[cam])
+        mask_rgb = _ensure_rgb((mask * 255.0).astype(np.uint8))
+        masked_rgb = _ensure_rgb(masked)
+
+        orig_rgb = orig_rgb[::-1]
+        mask_rgb = mask_rgb[::-1]
+        masked_rgb = masked_rgb[::-1]
+        row = np.concatenate([orig_rgb, mask_rgb, masked_rgb], axis=1)
+        rows.append(row)
+
+    if missing:
+        print(f"[warning] missing video keys: {missing}; disabling video grid")
+        return None
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    return np.concatenate(rows, axis=0)
+
+
+def _select_video_cameras(
+    video_camera: Optional[Union[Sequence[str], str]],
+    image_keys: Sequence[str],
+    obs_key_mapping: Mapping[str, str],
+    explicit: bool = False,
+) -> Sequence[str]:
+    cameras = []
+    if explicit:
+        if isinstance(video_camera, (list, tuple)):
+            cameras = [str(name) for name in video_camera]
+        elif video_camera:
+            cameras = [str(video_camera)]
+    if cameras:
+        return cameras
+    env_keys = [obs_key_mapping.get(k, k) for k in image_keys]
+    preferred = []
+    for name in ("agentview_image", "robot0_eye_in_hand_image"):
+        if name in env_keys:
+            preferred.append(name)
+    if preferred:
+        return preferred
+    return env_keys[:2]
+
+
 def _mask_env_obs_single(
     env_obs: Mapping[str, Any],
     env: Any,
@@ -271,16 +367,26 @@ def run_env_rollouts(
     seg_fill_value = float(getattr(cfg, "seg_fill_value", 0.0))
     seg_blur_ksize = int(getattr(cfg, "seg_blur_ksize", 11))
     seg_blur_sigma = float(getattr(cfg, "seg_blur_sigma", 5.0))
+    video_show_masks = bool(getattr(cfg, "video_show_masks", False))
 
     video_dir = resolve_video_dir(cfg)
     save_videos = int(getattr(cfg, "save_videos", 0))
     video_writer = None
     video_camera = None
+    video_cameras = []
+    video_camera_explicit = bool(str(getattr(cfg, "video_camera", "")).strip())
     if save_videos > 0:
         video_camera = select_video_camera(cfg, image_keys, obs_key_mapping)
         if not video_camera:
             print("[warning] save_videos requested but no image_keys; skipping video")
         else:
+            if video_show_masks:
+                video_cameras = _select_video_cameras(
+                    video_camera,
+                    image_keys,
+                    obs_key_mapping,
+                    explicit=video_camera_explicit,
+                )
             video_writer = VideoWriter(
                 video_path=str(video_dir),
                 save_video=True,
@@ -396,9 +502,22 @@ def run_env_rollouts(
 
                 env_obs, _, done, _ = env.step(action_np)
                 if video_writer and ep_idx < save_videos:
-                    video_writer.append_obs(
-                        env_obs, done=bool(done), idx=ep_idx, camera_name=video_camera
-                    )
+                    if video_show_masks:
+                        frame = _build_mask_grid(
+                            env_obs,
+                            env,
+                            video_cameras,
+                            mode=seg_mode,
+                            fill_value=seg_fill_value,
+                            blur_ksize=seg_blur_ksize,
+                            blur_sigma=seg_blur_sigma,
+                        )
+                        if frame is not None:
+                            video_writer.append_image(frame, idx=ep_idx)
+                    else:
+                        video_writer.append_obs(
+                            env_obs, done=bool(done), idx=ep_idx, camera_name=video_camera
+                        )
                 masked_obs = _mask_env_obs_single(
                     env_obs,
                     env,
@@ -599,12 +718,25 @@ def run_env_rollouts(
             if video_writer:
                 for i in range(remaining):
                     if record_active[i] and video_ids[i] is not None:
-                        video_writer.append_obs(
-                            env_obs_list[i],
-                            done=bool(done_array[i]),
-                            idx=video_ids[i],
-                            camera_name=video_camera,
-                        )
+                        if video_show_masks:
+                            frame = _build_mask_grid(
+                                env_obs_list[i],
+                                env,
+                                video_cameras,
+                                mode=seg_mode,
+                                fill_value=seg_fill_value,
+                                blur_ksize=seg_blur_ksize,
+                                blur_sigma=seg_blur_sigma,
+                            )
+                            if frame is not None:
+                                video_writer.append_image(frame, idx=video_ids[i])
+                        else:
+                            video_writer.append_obs(
+                                env_obs_list[i],
+                                done=bool(done_array[i]),
+                                idx=video_ids[i],
+                                camera_name=video_camera,
+                            )
                         if bool(done_array[i]):
                             record_active[i] = False
 
