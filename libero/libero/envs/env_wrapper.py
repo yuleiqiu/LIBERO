@@ -254,8 +254,9 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
                 np.array(255.0 * cm.rainbow(inds[seg_im], 10))
                 .astype(np.uint8)[..., :3]
                 .astype(np.uint8)
-                .squeeze(-2)
             )
+            if seg_img.ndim == 4 and seg_img.shape[-2] == 1:
+                seg_img = seg_img.squeeze(-2)
             print(seg_img.shape)
             cv2.imshow("Seg Image", seg_img[::-1])
             cv2.waitKey(0)

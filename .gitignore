@@ -21,3 +21,6 @@ libero.egg-info/
 .env
 demonstration_data/
 tmp/*.hdf5
+tmp/*.png
+tmp/*.jpg
+tmp/*.jpeg
