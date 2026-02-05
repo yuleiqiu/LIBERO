@@ -28,8 +28,9 @@ class RolloutConfig:
 
 @dataclass
 class SegRolloutConfig(RolloutConfig):
-    seg_mode: str = "hard"
+    seg_mode: str = "soft"
     seg_fill_value: float = 0.0
     seg_blur_ksize: int = 11
     seg_blur_sigma: float = 5.0
+    seg_blur_alpha: float = 1.0
     video_show_masks: bool = False

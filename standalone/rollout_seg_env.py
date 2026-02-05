@@ -112,6 +112,7 @@ def _apply_mask_image(
     fill_value: float,
     blur_ksize: int,
     blur_sigma: float,
+    blur_alpha: float,
 ) -> np.ndarray:
     layout = _infer_layout(image)
     img_hwc, orig_layout = _to_hwc(image, layout)
@@ -129,7 +130,9 @@ def _apply_mask_image(
         if k % 2 == 0:
             k += 1
         blurred = cv2.GaussianBlur(img, (k, k), float(blur_sigma))
-        out = img * mask + (1.0 - mask) * blurred
+        alpha = float(blur_alpha)
+        bg = (1.0 - alpha) * img + alpha * blurred
+        out = img * mask + (1.0 - mask) * bg
     else:
         raise ValueError(f"unknown seg_mode: {mode}")
 
@@ -168,6 +171,7 @@ def _build_mask_grid(
     fill_value: float,
     blur_ksize: int,
     blur_sigma: float,
+    blur_alpha: float,
 ) -> Optional[np.ndarray]:
     rows = []
     missing = []
@@ -193,6 +197,7 @@ def _build_mask_grid(
             fill_value=fill_value,
             blur_ksize=blur_ksize,
             blur_sigma=blur_sigma,
+            blur_alpha=blur_alpha,
         )
         orig_rgb = _ensure_rgb(env_obs[cam])
         mask_rgb = _ensure_rgb((mask * 255.0).astype(np.uint8))
@@ -247,6 +252,7 @@ def _mask_env_obs_single(
     fill_value: float,
     blur_ksize: int,
     blur_sigma: float,
+    blur_alpha: float,
 ) -> Dict[str, Any]:
     masked = dict(env_obs)
     for key in image_keys:
@@ -266,6 +272,7 @@ def _mask_env_obs_single(
             fill_value=fill_value,
             blur_ksize=blur_ksize,
             blur_sigma=blur_sigma,
+            blur_alpha=blur_alpha,
         )
     return masked
 
@@ -279,6 +286,7 @@ def _mask_env_obs_batch(
     fill_value: float,
     blur_ksize: int,
     blur_sigma: float,
+    blur_alpha: float,
 ) -> Sequence[Dict[str, Any]]:
     masked_list = [dict(obs) for obs in env_obs_list]
     for key in image_keys:
@@ -303,6 +311,7 @@ def _mask_env_obs_batch(
                 fill_value=fill_value,
                 blur_ksize=blur_ksize,
                 blur_sigma=blur_sigma,
+                blur_alpha=blur_alpha,
             )
     return masked_list
 
@@ -367,6 +376,7 @@ def run_env_rollouts(
     seg_fill_value = float(getattr(cfg, "seg_fill_value", 0.0))
     seg_blur_ksize = int(getattr(cfg, "seg_blur_ksize", 11))
     seg_blur_sigma = float(getattr(cfg, "seg_blur_sigma", 5.0))
+    seg_blur_alpha = float(getattr(cfg, "seg_blur_alpha", 1.0))
     video_show_masks = bool(getattr(cfg, "video_show_masks", False))
 
     video_dir = resolve_video_dir(cfg)
@@ -468,6 +478,7 @@ def run_env_rollouts(
                 fill_value=seg_fill_value,
                 blur_ksize=seg_blur_ksize,
                 blur_sigma=seg_blur_sigma,
+                blur_alpha=seg_blur_alpha,
             )
             obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
             history.add(obs)
@@ -484,6 +495,7 @@ def run_env_rollouts(
                     fill_value=seg_fill_value,
                     blur_ksize=seg_blur_ksize,
                     blur_sigma=seg_blur_sigma,
+                    blur_alpha=seg_blur_alpha,
                 )
                 obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
                 history.add(obs)
@@ -511,6 +523,7 @@ def run_env_rollouts(
                             fill_value=seg_fill_value,
                             blur_ksize=seg_blur_ksize,
                             blur_sigma=seg_blur_sigma,
+                            blur_alpha=seg_blur_alpha,
                         )
                         if frame is not None:
                             video_writer.append_image(frame, idx=ep_idx)
@@ -527,6 +540,7 @@ def run_env_rollouts(
                     fill_value=seg_fill_value,
                     blur_ksize=seg_blur_ksize,
                     blur_sigma=seg_blur_sigma,
+                    blur_alpha=seg_blur_alpha,
                 )
                 obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
                 history.add(obs)
@@ -629,6 +643,7 @@ def run_env_rollouts(
             fill_value=seg_fill_value,
             blur_ksize=seg_blur_ksize,
             blur_sigma=seg_blur_sigma,
+            blur_alpha=seg_blur_alpha,
         )
         for i in range(env_num):
             obs = extract_env_obs(masked_list[i], obs_keys, image_keys, obs_key_mapping)
@@ -647,6 +662,7 @@ def run_env_rollouts(
                 fill_value=seg_fill_value,
                 blur_ksize=seg_blur_ksize,
                 blur_sigma=seg_blur_sigma,
+                blur_alpha=seg_blur_alpha,
             )
             for i in range(env_num):
                 obs = extract_env_obs(masked_list[i], obs_keys, image_keys, obs_key_mapping)
@@ -727,6 +743,7 @@ def run_env_rollouts(
                                 fill_value=seg_fill_value,
                                 blur_ksize=seg_blur_ksize,
                                 blur_sigma=seg_blur_sigma,
+                                blur_alpha=seg_blur_alpha,
                             )
                             if frame is not None:
                                 video_writer.append_image(frame, idx=video_ids[i])
@@ -749,6 +766,7 @@ def run_env_rollouts(
                 fill_value=seg_fill_value,
                 blur_ksize=seg_blur_ksize,
                 blur_sigma=seg_blur_sigma,
+                blur_alpha=seg_blur_alpha,
             )
             for i in range(env_num):
                 obs = extract_env_obs(masked_list[i], obs_keys, image_keys, obs_key_mapping)

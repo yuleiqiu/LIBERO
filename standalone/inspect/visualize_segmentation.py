@@ -83,6 +83,12 @@ def parse_args():
         default=5.0,
         help="Gaussian blur sigma for soft masking.",
     )
+    parser.add_argument(
+        "--seg-blur-alpha",
+        type=float,
+        default=1.0,
+        help="Blend weight for blurred background (0=original, 1=blurred).",
+    )
     return parser.parse_args()
 
 
@@ -153,6 +159,7 @@ def _apply_mask_image(
     fill_value: float,
     blur_ksize: int,
     blur_sigma: float,
+    blur_alpha: float,
 ) -> np.ndarray:
     layout = _infer_layout(image)
     img_hwc = _to_hwc(image, layout)
@@ -170,7 +177,9 @@ def _apply_mask_image(
         if k % 2 == 0:
             k += 1
         blurred = cv2.GaussianBlur(img, (k, k), float(blur_sigma))
-        out = img * mask + (1.0 - mask) * blurred
+        alpha = float(blur_alpha)
+        bg = (1.0 - alpha) * img + alpha * blurred
+        out = img * mask + (1.0 - mask) * bg
     else:
         raise ValueError(f"unknown seg_mode: {mode}")
 
@@ -244,6 +253,7 @@ def main():
                     fill_value=args.seg_fill_value,
                     blur_ksize=args.seg_blur_ksize,
                     blur_sigma=args.seg_blur_sigma,
+                    blur_alpha=args.seg_blur_alpha,
                 )
             elif args.interest_only:
                 mask = np.squeeze(env.get_segmentation_of_interest(seg))
