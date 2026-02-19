@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Visualize patch correspondence attention heatmaps for LIBERO demos."""
+"""Compare patch uniqueness confidence heatmaps across two LIBERO hdf5 files.
+
+Goal patches come from one demo in a "single" hdf5, while current frames
+come from another demo in a "multi" hdf5.
+"""
 
 import argparse
 import json
@@ -18,6 +22,14 @@ from transformers import AutoImageProcessor, AutoModel
 
 
 CameraFrame = Dict[str, np.ndarray]
+
+METRIC_ORDER = ("s_lse", "margin", "p_max", "neg_entropy")
+METRIC_TITLES = {
+    "s_lse": "s_i=logsumexp_j S_ij",
+    "margin": "top1-top2",
+    "p_max": "max_j p_ij",
+    "neg_entropy": "-H(p_i)",
+}
 
 
 def demo_sort_key(name: str):
@@ -202,25 +214,29 @@ def infer_patch_grid(
     return side, side
 
 
-def compute_attn(
-    xt: torch.Tensor,
-    xg: torch.Tensor,
-    tau: float,
-    agg: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def compute_row_confidences(xt: torch.Tensor, xg: torch.Tensor, tau: float) -> Dict[str, torch.Tensor]:
     if tau <= 0:
         raise ValueError(f"tau must be > 0, got {tau}")
 
-    sim = (xt @ xg.transpose(0, 1)) / tau  # [N, N]
-    if agg == "logsumexp":
-        score = torch.logsumexp(sim, dim=1)  # [N]
-    elif agg == "max":
-        score = torch.max(sim, dim=1).values  # [N]
-    else:
-        raise ValueError(f"Unsupported agg: {agg}")
+    sim = (xt @ xg.transpose(0, 1)) / tau  # [N_cur, N_goal]
+    if int(sim.shape[1]) < 2:
+        raise ValueError(f"Need at least 2 goal patches for margin, got {sim.shape[1]}")
 
-    attn = torch.softmax(score, dim=0)  # [N]
-    return attn, score
+    s_lse = torch.logsumexp(sim, dim=1)
+    top2 = torch.topk(sim, k=2, dim=1).values
+    margin = top2[:, 0] - top2[:, 1]
+
+    p = torch.softmax(sim, dim=1)
+    p_max = torch.max(p, dim=1).values
+    entropy = -(p * torch.log(torch.clamp(p, min=1e-12))).sum(dim=1)
+    neg_entropy = -entropy
+
+    return {
+        "s_lse": s_lse,
+        "margin": margin,
+        "p_max": p_max,
+        "neg_entropy": neg_entropy,
+    }
 
 
 def upsample_patch_map(vec: torch.Tensor, hp: int, wp: int, out_hw: Tuple[int, int]) -> np.ndarray:
@@ -245,6 +261,27 @@ def normalize_minmax(x: np.ndarray) -> np.ndarray:
     if hi <= lo:
         return np.zeros_like(x, dtype=np.float32)
     return ((x - lo) / (hi - lo)).astype(np.float32)
+
+
+def vector_to_heat(
+    vec: torch.Tensor,
+    hp: int,
+    wp: int,
+    out_hw: Tuple[int, int],
+    map_mode: str,
+    low_q: float,
+    high_q: float,
+) -> np.ndarray:
+    if map_mode == "softmax_i":
+        vec = torch.softmax(vec, dim=0)
+        return normalize_minmax(upsample_patch_map(vec, hp, wp, out_hw=out_hw))
+    if map_mode == "percentile":
+        return normalize_percentile(
+            upsample_patch_map(vec, hp, wp, out_hw=out_hw),
+            low_q=low_q,
+            high_q=high_q,
+        )
+    raise ValueError(f"Unsupported map_mode: {map_mode}")
 
 
 def pixel_values_to_rgb(pixel_values_chw: torch.Tensor, processor) -> np.ndarray:
@@ -282,26 +319,72 @@ def make_overlay(img_rgb: np.ndarray, heat01: np.ndarray, alpha: float) -> np.nd
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def save_panel(
-    cam1_overlay: np.ndarray,
-    cam1_goal: np.ndarray,
-    cam2_overlay: np.ndarray,
-    cam2_goal: np.ndarray,
+def add_title(img_rgb: np.ndarray, title: str) -> np.ndarray:
+    out = img_rgb.copy()
+    h, w = out.shape[:2]
+    bar_h = max(24, int(round(0.10 * h)))
+    cv2.rectangle(out, (0, 0), (w - 1, bar_h), (0, 0, 0), thickness=-1)
+    font_scale = max(0.5, h / 420.0)
+    cv2.putText(
+        out,
+        title,
+        (8, int(bar_h * 0.72)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        (255, 255, 255),
+        thickness=1,
+        lineType=cv2.LINE_AA,
+    )
+    return out
+
+
+def render_camera_row(
+    cur_vis: np.ndarray,
+    goal_vis: np.ndarray,
+    heat_by_metric: Dict[str, np.ndarray],
+    alpha: float,
 ) -> np.ndarray:
-    top = np.hstack([cam1_overlay, cam1_goal])
-    bottom = np.hstack([cam2_overlay, cam2_goal])
-    panel = np.vstack([top, bottom])
-    return panel
+    tiles = [add_title(cur_vis, "current")]
+    for metric_name in METRIC_ORDER:
+        overlay = make_overlay(cur_vis, heat_by_metric[metric_name], alpha=alpha)
+        tiles.append(add_title(overlay, METRIC_TITLES[metric_name]))
+    tiles.append(add_title(goal_vis, "goal"))
+    return np.hstack(tiles)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Patch correspondence heatmap visualization")
-    parser.add_argument("--hdf5-path", type=str, required=True, help="Path to one LIBERO hdf5 file")
+    parser = argparse.ArgumentParser(
+        description="Cross-hdf5 patch uniqueness confidence heatmap visualization"
+    )
     parser.add_argument(
-        "--demo_index",
+        "--single_hdf5_path",
+        type=str,
+        required=True,
+        help="Path to single-task LIBERO hdf5 (goal source).",
+    )
+    parser.add_argument(
+        "--single_demo_index",
         type=int,
         default=0,
-        help="Demo index in sorted demo list (default: 0)",
+        help="Goal demo index in single_hdf5_path (default: 0)",
+    )
+    parser.add_argument(
+        "--single_goal_frame",
+        type=int,
+        default=-1,
+        help="Goal frame index in single demo (supports negative indexing, default: -1).",
+    )
+    parser.add_argument(
+        "--multi_hdf5_path",
+        type=str,
+        required=True,
+        help="Path to multi-task LIBERO hdf5 (current sequence source).",
+    )
+    parser.add_argument(
+        "--multi_demo_index",
+        type=int,
+        default=0,
+        help="Current demo index in multi_hdf5_path (default: 0)",
     )
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory for PNG/MP4")
     parser.add_argument(
@@ -310,21 +393,38 @@ def parse_args():
         default="facebook/dinov2-with-registers-base",
         help="HuggingFace model name",
     )
-    parser.add_argument("--tau", type=float, default=0.1, help="Temperature for similarity")
-    parser.add_argument(
-        "--agg",
-        type=str,
-        default="logsumexp",
-        choices=["logsumexp", "max"],
-        help="Aggregation over goal patches",
-    )
+    parser.add_argument("--tau", type=float, default=0.1, help="Temperature in S = (x_t @ x_g^T) / tau")
     parser.add_argument("--alpha", type=float, default=0.45, help="Heatmap overlay alpha")
     parser.add_argument(
-        "--heat_source",
+        "--map_mode",
         type=str,
-        default="score",
-        choices=["score", "attn"],
-        help="Which heatmap to overlay: score(percentile) or attn(min-max).",
+        default="percentile",
+        choices=["percentile", "softmax_i"],
+        help="Map confidence vector to 2D heatmap via percentile clip or softmax over i.",
+    )
+    parser.add_argument(
+        "--percentile_low",
+        type=float,
+        default=5.0,
+        help="Lower percentile for map_mode=percentile",
+    )
+    parser.add_argument(
+        "--percentile_high",
+        type=float,
+        default=95.0,
+        help="Upper percentile for map_mode=percentile",
+    )
+    parser.add_argument(
+        "--max_frames",
+        type=int,
+        default=None,
+        help="Optional cap on rendered current frames (for quick experiments).",
+    )
+    parser.add_argument(
+        "--video_name",
+        type=str,
+        default="uniqueness_single2multi.mp4",
+        help="Output video filename",
     )
     parser.add_argument("--device", type=str, default=None, help="cuda/cpu")
     parser.add_argument(
@@ -358,6 +458,11 @@ def main():
 
     if not (0.0 <= args.alpha <= 1.0):
         raise ValueError(f"alpha must be in [0,1], got {args.alpha}")
+    if args.percentile_high <= args.percentile_low:
+        raise ValueError(
+            f"percentile_high must be > percentile_low, got "
+            f"{args.percentile_high} <= {args.percentile_low}"
+        )
 
     device = (
         torch.device(args.device)
@@ -365,12 +470,32 @@ def main():
         else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    frames, demo_key, dataset_fps = load_demo_frames(
-        hdf5_path=args.hdf5_path,
-        demo_index=args.demo_index,
+    multi_frames, multi_demo_key, multi_dataset_fps = load_demo_frames(
+        hdf5_path=args.multi_hdf5_path,
+        demo_index=args.multi_demo_index,
         cam1_key=args.cam1_key,
         cam2_key=args.cam2_key,
     )
+    single_frames, single_demo_key, _ = load_demo_frames(
+        hdf5_path=args.single_hdf5_path,
+        demo_index=args.single_demo_index,
+        cam1_key=args.cam1_key,
+        cam2_key=args.cam2_key,
+    )
+
+    single_goal_frame = int(args.single_goal_frame)
+    if single_goal_frame < 0:
+        single_goal_frame = len(single_frames) + single_goal_frame
+    if single_goal_frame < 0 or single_goal_frame >= len(single_frames):
+        raise IndexError(
+            f"single_goal_frame {args.single_goal_frame} out of range for {len(single_frames)} frames"
+        )
+
+    num_frames = len(multi_frames)
+    if args.max_frames is not None:
+        if args.max_frames <= 0:
+            raise ValueError(f"max_frames must be > 0, got {args.max_frames}")
+        num_frames = min(num_frames, int(args.max_frames))
 
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -378,8 +503,8 @@ def main():
     model = AutoModel.from_pretrained(args.model_name).to(device).eval()
     processor = AutoImageProcessor.from_pretrained(args.model_name)
 
-    goal_cam1 = to_uint8_rgb(frames[-1]["cam1"])
-    goal_cam2 = to_uint8_rgb(frames[-1]["cam2"])
+    goal_cam1 = to_uint8_rgb(single_frames[single_goal_frame]["cam1"])
+    goal_cam2 = to_uint8_rgb(single_frames[single_goal_frame]["cam2"])
 
     goal_patches_batch, input_hw, num_register_tokens, goal_pixel_values_batch = encode_patches(
         [goal_cam1, goal_cam2],
@@ -397,25 +522,31 @@ def main():
     hp, wp = infer_patch_grid(num_patches, input_hw=input_hw, model=model)
 
     print("[Info] model_name:", args.model_name)
-    print("[Info] demo_key:", demo_key)
-    print("[Info] demo_index:", args.demo_index)
-    print("[Info] num_frames:", len(frames))
+    print("[Info] single_hdf5_path:", str(Path(args.single_hdf5_path).expanduser().resolve()))
+    print("[Info] single_demo_key(goal):", single_demo_key)
+    print("[Info] single_demo_index(goal):", args.single_demo_index)
+    print("[Info] single_goal_frame:", single_goal_frame)
+    print("[Info] multi_hdf5_path:", str(Path(args.multi_hdf5_path).expanduser().resolve()))
+    print("[Info] multi_demo_key(current):", multi_demo_key)
+    print("[Info] multi_demo_index(current):", args.multi_demo_index)
+    print("[Info] rendered_num_frames(current):", num_frames)
     print("[Info] R:", num_register_tokens)
     print("[Info] d:", dim)
     print("[Info] N:", num_patches)
     print("[Info] patch_grid:", (hp, wp))
     print("[Info] image_size:", input_hw)
     print("[Info] tau:", args.tau)
-    print("[Info] agg:", args.agg)
-    print("[Info] heat_source:", args.heat_source)
+    print("[Info] map_mode:", args.map_mode)
+    print("[Info] metrics:", ", ".join(METRIC_ORDER))
 
-    mp4_fps = int(args.fps) if args.fps is not None else int(dataset_fps)
-    writer = imageio.get_writer(str(out_dir / "attn.mp4"), fps=mp4_fps)
+    mp4_fps = int(args.fps) if args.fps is not None else int(multi_dataset_fps)
+    mp4_path = out_dir / args.video_name
+    writer = imageio.get_writer(str(mp4_path), fps=mp4_fps)
     print("[Info] mp4_fps:", mp4_fps)
 
-    for t in tqdm(range(len(frames)), desc="Rendering heatmaps"):
-        cur_cam1 = to_uint8_rgb(frames[t]["cam1"])
-        cur_cam2 = to_uint8_rgb(frames[t]["cam2"])
+    for t in tqdm(range(num_frames), desc="Rendering cross-hdf5 uniqueness heatmaps"):
+        cur_cam1 = to_uint8_rgb(multi_frames[t]["cam1"])
+        cur_cam2 = to_uint8_rgb(multi_frames[t]["cam2"])
 
         cur_patches_batch, cur_input_hw, _, cur_pixel_values_batch = encode_patches(
             [cur_cam1, cur_cam2],
@@ -429,38 +560,46 @@ def main():
                 f"Processor output size changed from {input_hw} to {cur_input_hw} at frame {t}"
             )
 
-        xt_cam1 = cur_patches_batch[0]
-        xt_cam2 = cur_patches_batch[1]
+        confs_cam1 = compute_row_confidences(cur_patches_batch[0], goal_cam1_patch, tau=args.tau)
+        confs_cam2 = compute_row_confidences(cur_patches_batch[1], goal_cam2_patch, tau=args.tau)
 
-        attn1, score1 = compute_attn(xt_cam1, goal_cam1_patch, tau=args.tau, agg=args.agg)
-        attn2, score2 = compute_attn(xt_cam2, goal_cam2_patch, tau=args.tau, agg=args.agg)
-
-        heat1_score = normalize_percentile(upsample_patch_map(score1, hp, wp, out_hw=input_hw))
-        heat2_score = normalize_percentile(upsample_patch_map(score2, hp, wp, out_hw=input_hw))
-
-        heat1_attn = normalize_minmax(upsample_patch_map(attn1, hp, wp, out_hw=input_hw))
-        heat2_attn = normalize_minmax(upsample_patch_map(attn2, hp, wp, out_hw=input_hw))
-
-        if args.heat_source == "attn":
-            heat1 = heat1_attn
-            heat2 = heat2_attn
-        else:
-            heat1 = heat1_score
-            heat2 = heat2_score
+        heat_cam1 = {
+            name: vector_to_heat(
+                confs_cam1[name],
+                hp=hp,
+                wp=wp,
+                out_hw=input_hw,
+                map_mode=args.map_mode,
+                low_q=args.percentile_low,
+                high_q=args.percentile_high,
+            )
+            for name in METRIC_ORDER
+        }
+        heat_cam2 = {
+            name: vector_to_heat(
+                confs_cam2[name],
+                hp=hp,
+                wp=wp,
+                out_hw=input_hw,
+                map_mode=args.map_mode,
+                low_q=args.percentile_low,
+                high_q=args.percentile_high,
+            )
+            for name in METRIC_ORDER
+        }
 
         # Always flip vertically for visualization consistency with LIBERO camera convention.
         cam1_vis = pixel_values_to_rgb(cur_pixel_values_batch[0], processor=processor)[::-1]
         cam2_vis = pixel_values_to_rgb(cur_pixel_values_batch[1], processor=processor)[::-1]
-        heat1 = heat1[::-1]
-        heat2 = heat2[::-1]
-        cam1_overlay = make_overlay(cam1_vis, heat1, alpha=args.alpha)
-        cam2_overlay = make_overlay(cam2_vis, heat2, alpha=args.alpha)
+        for metric_name in METRIC_ORDER:
+            heat_cam1[metric_name] = heat_cam1[metric_name][::-1]
+            heat_cam2[metric_name] = heat_cam2[metric_name][::-1]
 
-        panel = save_panel(
-            cam1_overlay=cam1_overlay,
-            cam1_goal=goal_cam1_vis,
-            cam2_overlay=cam2_overlay,
-            cam2_goal=goal_cam2_vis,
+        panel = np.vstack(
+            [
+                render_camera_row(cam1_vis, goal_cam1_vis, heat_cam1, alpha=args.alpha),
+                render_camera_row(cam2_vis, goal_cam2_vis, heat_cam2, alpha=args.alpha),
+            ]
         )
 
         writer.append_data(panel)
@@ -469,9 +608,9 @@ def main():
 
     writer.close()
 
-    print(f"[Done] Saved MP4 to: {out_dir / 'attn.mp4'}")
+    print(f"[Done] Saved MP4 to: {mp4_path}")
     if args.save_png:
-        print(f"[Done] Saved {len(frames)} PNG frames to: {out_dir}")
+        print(f"[Done] Saved {num_frames} PNG frames to: {out_dir}")
 
 
 if __name__ == "__main__":

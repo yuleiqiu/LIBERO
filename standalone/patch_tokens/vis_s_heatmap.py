@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize patch correspondence attention heatmaps for LIBERO demos."""
+"""Visualize row-aggregated patch score (s_i) heatmaps for LIBERO demos."""
 
 import argparse
 import json
@@ -202,12 +202,12 @@ def infer_patch_grid(
     return side, side
 
 
-def compute_attn(
+def compute_score(
     xt: torch.Tensor,
     xg: torch.Tensor,
     tau: float,
     agg: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     if tau <= 0:
         raise ValueError(f"tau must be > 0, got {tau}")
 
@@ -219,8 +219,7 @@ def compute_attn(
     else:
         raise ValueError(f"Unsupported agg: {agg}")
 
-    attn = torch.softmax(score, dim=0)  # [N]
-    return attn, score
+    return score
 
 
 def upsample_patch_map(vec: torch.Tensor, hp: int, wp: int, out_hw: Tuple[int, int]) -> np.ndarray:
@@ -237,14 +236,6 @@ def normalize_percentile(x: np.ndarray, low_q: float = 5.0, high_q: float = 95.0
         return np.zeros_like(x, dtype=np.float32)
     y = (x - lo) / (hi - lo)
     return np.clip(y, 0.0, 1.0).astype(np.float32)
-
-
-def normalize_minmax(x: np.ndarray) -> np.ndarray:
-    lo = float(x.min())
-    hi = float(x.max())
-    if hi <= lo:
-        return np.zeros_like(x, dtype=np.float32)
-    return ((x - lo) / (hi - lo)).astype(np.float32)
 
 
 def pixel_values_to_rgb(pixel_values_chw: torch.Tensor, processor) -> np.ndarray:
@@ -295,7 +286,7 @@ def save_panel(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Patch correspondence heatmap visualization")
+    parser = argparse.ArgumentParser(description="Row-aggregated patch score (s_i) heatmap visualization")
     parser.add_argument("--hdf5-path", type=str, required=True, help="Path to one LIBERO hdf5 file")
     parser.add_argument(
         "--demo_index",
@@ -319,13 +310,6 @@ def parse_args():
         help="Aggregation over goal patches",
     )
     parser.add_argument("--alpha", type=float, default=0.45, help="Heatmap overlay alpha")
-    parser.add_argument(
-        "--heat_source",
-        type=str,
-        default="score",
-        choices=["score", "attn"],
-        help="Which heatmap to overlay: score(percentile) or attn(min-max).",
-    )
     parser.add_argument("--device", type=str, default=None, help="cuda/cpu")
     parser.add_argument(
         "--cam1_key",
@@ -407,10 +391,10 @@ def main():
     print("[Info] image_size:", input_hw)
     print("[Info] tau:", args.tau)
     print("[Info] agg:", args.agg)
-    print("[Info] heat_source:", args.heat_source)
+    print("[Info] heat_source: score (s_i)")
 
     mp4_fps = int(args.fps) if args.fps is not None else int(dataset_fps)
-    writer = imageio.get_writer(str(out_dir / "attn.mp4"), fps=mp4_fps)
+    writer = imageio.get_writer(str(out_dir / "score.mp4"), fps=mp4_fps)
     print("[Info] mp4_fps:", mp4_fps)
 
     for t in tqdm(range(len(frames)), desc="Rendering heatmaps"):
@@ -432,21 +416,14 @@ def main():
         xt_cam1 = cur_patches_batch[0]
         xt_cam2 = cur_patches_batch[1]
 
-        attn1, score1 = compute_attn(xt_cam1, goal_cam1_patch, tau=args.tau, agg=args.agg)
-        attn2, score2 = compute_attn(xt_cam2, goal_cam2_patch, tau=args.tau, agg=args.agg)
+        score1 = compute_score(xt_cam1, goal_cam1_patch, tau=args.tau, agg=args.agg)
+        score2 = compute_score(xt_cam2, goal_cam2_patch, tau=args.tau, agg=args.agg)
 
         heat1_score = normalize_percentile(upsample_patch_map(score1, hp, wp, out_hw=input_hw))
         heat2_score = normalize_percentile(upsample_patch_map(score2, hp, wp, out_hw=input_hw))
 
-        heat1_attn = normalize_minmax(upsample_patch_map(attn1, hp, wp, out_hw=input_hw))
-        heat2_attn = normalize_minmax(upsample_patch_map(attn2, hp, wp, out_hw=input_hw))
-
-        if args.heat_source == "attn":
-            heat1 = heat1_attn
-            heat2 = heat2_attn
-        else:
-            heat1 = heat1_score
-            heat2 = heat2_score
+        heat1 = heat1_score
+        heat2 = heat2_score
 
         # Always flip vertically for visualization consistency with LIBERO camera convention.
         cam1_vis = pixel_values_to_rgb(cur_pixel_values_batch[0], processor=processor)[::-1]
@@ -469,7 +446,7 @@ def main():
 
     writer.close()
 
-    print(f"[Done] Saved MP4 to: {out_dir / 'attn.mp4'}")
+    print(f"[Done] Saved MP4 to: {out_dir / 'score.mp4'}")
     if args.save_png:
         print(f"[Done] Saved {len(frames)} PNG frames to: {out_dir}")
 

@@ -114,11 +114,9 @@ python standalone/train.py \
 
 ## 6. Terminology and Lengths (Clarification)
 
-Your intended interpretation is correct, and the DP logic is consistent with it:
-
-- **exec_horizon**: how many actions are actually executed each step (what you *do*).
-- **predict_horizon / n_action_steps**: how many actions the model outputs and the dataset supervises (what you *predict*).
 - **horizon**: the full action trajectory length the diffusion model generates internally (what DP *samples*).
+- **predict_horizon / n_action_steps**: how many actions the model outputs and the dataset supervises (what you *predict*).
+- **exec_horizon**: how many actions are actually executed each step (what you *do*).
 
 The default mapping in this codebase is:
 

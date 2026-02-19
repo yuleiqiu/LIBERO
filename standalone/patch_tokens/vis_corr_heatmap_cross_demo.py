@@ -173,9 +173,10 @@ def encode_patches(
     model,
     processor,
     device: torch.device,
-) -> Tuple[torch.Tensor, Tuple[int, int], int]:
+) -> Tuple[torch.Tensor, Tuple[int, int], int, torch.Tensor]:
     inputs = processor(images=list(images), return_tensors="pt")
-    pixel_values = inputs["pixel_values"].to(device)
+    pixel_values_cpu = inputs["pixel_values"]
+    pixel_values = pixel_values_cpu.to(device)
 
     with torch.inference_mode():
         outputs = model(pixel_values=pixel_values)
@@ -186,7 +187,7 @@ def encode_patches(
     patches = F.normalize(patches, dim=-1)
 
     input_hw = (int(pixel_values.shape[-2]), int(pixel_values.shape[-1]))
-    return patches, input_hw, num_register_tokens
+    return patches, input_hw, num_register_tokens, pixel_values_cpu
 
 
 def infer_patch_grid(
@@ -267,35 +268,49 @@ def normalize_minmax(x: np.ndarray) -> np.ndarray:
     return ((x - lo) / (hi - lo)).astype(np.float32)
 
 
-def resize_rgb(image: np.ndarray, out_hw: Tuple[int, int], flip_vertical: bool = False) -> np.ndarray:
-    out_h, out_w = out_hw
-    img = to_uint8_rgb(image)
-    if flip_vertical:
-        img = img[::-1]
-    if img.shape[0] != out_h or img.shape[1] != out_w:
-        img = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_AREA)
+def pixel_values_to_rgb(pixel_values_chw: torch.Tensor, processor) -> np.ndarray:
+    mean = getattr(processor, "image_mean", [0.5, 0.5, 0.5])
+    std = getattr(processor, "image_std", [0.5, 0.5, 0.5])
+
+    if len(mean) != int(pixel_values_chw.shape[0]) or len(std) != int(pixel_values_chw.shape[0]):
+        raise ValueError(
+            f"Unexpected channel stats: C={pixel_values_chw.shape[0]}, "
+            f"len(mean)={len(mean)}, len(std)={len(std)}"
+        )
+
+    mean_t = torch.as_tensor(
+        mean, dtype=pixel_values_chw.dtype, device=pixel_values_chw.device
+    ).view(-1, 1, 1)
+    std_t = torch.as_tensor(
+        std, dtype=pixel_values_chw.dtype, device=pixel_values_chw.device
+    ).view(-1, 1, 1)
+    img = (pixel_values_chw * std_t + mean_t).clamp(0.0, 1.0)
+    img = (img.permute(1, 2, 0).cpu().numpy() * 255.0 + 0.5).astype(np.uint8)
     return img
 
 
-def make_overlay(img_rgb: np.ndarray, heat01: np.ndarray, alpha: float) -> np.ndarray:
+def heatmap_to_rgb(heat01: np.ndarray) -> np.ndarray:
     heat_u8 = np.clip(255.0 * heat01, 0, 255).astype(np.uint8)
     heat_bgr = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
     heat_rgb = cv2.cvtColor(heat_bgr, cv2.COLOR_BGR2RGB)
+    return heat_rgb
 
+
+def make_overlay(img_rgb: np.ndarray, heat01: np.ndarray, alpha: float) -> np.ndarray:
+    heat_rgb = heatmap_to_rgb(heat01).astype(np.float32)
     base = img_rgb.astype(np.float32)
-    color = heat_rgb.astype(np.float32)
-    out = (1.0 - alpha) * base + alpha * color
+    out = (1.0 - alpha) * base + alpha * heat_rgb
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def save_panel(
-    cam1_img: np.ndarray,
     cam1_overlay: np.ndarray,
-    cam2_img: np.ndarray,
+    cam1_goal: np.ndarray,
     cam2_overlay: np.ndarray,
+    cam2_goal: np.ndarray,
 ) -> np.ndarray:
-    top = np.hstack([cam1_img, cam1_overlay])
-    bottom = np.hstack([cam2_img, cam2_overlay])
+    top = np.hstack([cam1_overlay, cam1_goal])
+    bottom = np.hstack([cam2_overlay, cam2_goal])
     panel = np.vstack([top, bottom])
     return panel
 
@@ -324,7 +339,7 @@ def parse_args():
         choices=["logsumexp", "max"],
         help="Aggregation over goal patches",
     )
-    parser.add_argument("--alpha", type=float, default=0.45, help="Overlay alpha")
+    parser.add_argument("--alpha", type=float, default=0.45, help="Heatmap overlay alpha")
     parser.add_argument(
         "--heat_source",
         type=str,
@@ -350,11 +365,6 @@ def parse_args():
         type=int,
         default=None,
         help="Optional FPS override for MP4. Defaults to dataset control frequency.",
-    )
-    parser.add_argument(
-        "--flip_vertical",
-        action="store_true",
-        help="Flip RGB frames vertically before visualization.",
     )
     parser.add_argument(
         "--save_png",
@@ -392,7 +402,7 @@ def main():
     goal_cam1 = to_uint8_rgb(goal_last["cam1"])
     goal_cam2 = to_uint8_rgb(goal_last["cam2"])
 
-    goal_patches_batch, input_hw, num_register_tokens = encode_patches(
+    goal_patches_batch, input_hw, num_register_tokens, goal_pixel_values_batch = encode_patches(
         [goal_cam1, goal_cam2],
         model=model,
         processor=processor,
@@ -400,6 +410,8 @@ def main():
     )
     goal_cam1_patch = goal_patches_batch[0]
     goal_cam2_patch = goal_patches_batch[1]
+    goal_cam1_vis = pixel_values_to_rgb(goal_pixel_values_batch[0], processor=processor)[::-1]
+    goal_cam2_vis = pixel_values_to_rgb(goal_pixel_values_batch[1], processor=processor)[::-1]
 
     num_patches = int(goal_cam1_patch.shape[0])
     dim = int(goal_cam1_patch.shape[1])
@@ -428,7 +440,7 @@ def main():
         cur_cam1 = to_uint8_rgb(frames[t]["cam1"])
         cur_cam2 = to_uint8_rgb(frames[t]["cam2"])
 
-        cur_patches_batch, cur_input_hw, _ = encode_patches(
+        cur_patches_batch, cur_input_hw, _, cur_pixel_values_batch = encode_patches(
             [cur_cam1, cur_cam2],
             model=model,
             processor=processor,
@@ -452,9 +464,6 @@ def main():
         heat1_attn = normalize_minmax(upsample_patch_map(attn1, hp, wp, out_hw=input_hw))
         heat2_attn = normalize_minmax(upsample_patch_map(attn2, hp, wp, out_hw=input_hw))
 
-        cam1_vis = resize_rgb(cur_cam1, out_hw=input_hw, flip_vertical=args.flip_vertical)
-        cam2_vis = resize_rgb(cur_cam2, out_hw=input_hw, flip_vertical=args.flip_vertical)
-
         if args.heat_source == "attn":
             heat1 = heat1_attn
             heat2 = heat2_attn
@@ -462,14 +471,19 @@ def main():
             heat1 = heat1_score
             heat2 = heat2_score
 
+        # Always flip vertically for visualization consistency with LIBERO camera convention.
+        cam1_vis = pixel_values_to_rgb(cur_pixel_values_batch[0], processor=processor)[::-1]
+        cam2_vis = pixel_values_to_rgb(cur_pixel_values_batch[1], processor=processor)[::-1]
+        heat1 = heat1[::-1]
+        heat2 = heat2[::-1]
         cam1_overlay = make_overlay(cam1_vis, heat1, alpha=args.alpha)
         cam2_overlay = make_overlay(cam2_vis, heat2, alpha=args.alpha)
 
         panel = save_panel(
-            cam1_img=cam1_vis,
             cam1_overlay=cam1_overlay,
-            cam2_img=cam2_vis,
+            cam1_goal=goal_cam1_vis,
             cam2_overlay=cam2_overlay,
+            cam2_goal=goal_cam2_vis,
         )
 
         writer.append_data(panel)

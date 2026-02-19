@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Visualize patch correspondence attention heatmaps for LIBERO demos."""
+"""Visualize cross-hdf5 patch correspondence heatmaps for LIBERO demos.
+
+Goal patches come from one demo in a "single" hdf5, while current frames
+come from another demo in a "multi" hdf5.
+"""
 
 import argparse
 import json
@@ -295,13 +299,32 @@ def save_panel(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Patch correspondence heatmap visualization")
-    parser.add_argument("--hdf5-path", type=str, required=True, help="Path to one LIBERO hdf5 file")
+    parser = argparse.ArgumentParser(
+        description="Cross-hdf5 patch correspondence heatmap visualization"
+    )
     parser.add_argument(
-        "--demo_index",
+        "--single_hdf5_path",
+        type=str,
+        required=True,
+        help="Path to single-task LIBERO hdf5 (goal source).",
+    )
+    parser.add_argument(
+        "--single_demo_index",
         type=int,
         default=0,
-        help="Demo index in sorted demo list (default: 0)",
+        help="Goal demo index in single_hdf5_path (default: 0)",
+    )
+    parser.add_argument(
+        "--multi_hdf5_path",
+        type=str,
+        required=True,
+        help="Path to multi-task LIBERO hdf5 (current sequence source).",
+    )
+    parser.add_argument(
+        "--multi_demo_index",
+        type=int,
+        default=0,
+        help="Current demo index in multi_hdf5_path (default: 0)",
     )
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory for PNG/MP4")
     parser.add_argument(
@@ -322,7 +345,7 @@ def parse_args():
     parser.add_argument(
         "--heat_source",
         type=str,
-        default="score",
+        default="attn",
         choices=["score", "attn"],
         help="Which heatmap to overlay: score(percentile) or attn(min-max).",
     )
@@ -365,9 +388,15 @@ def main():
         else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    frames, demo_key, dataset_fps = load_demo_frames(
-        hdf5_path=args.hdf5_path,
-        demo_index=args.demo_index,
+    multi_frames, multi_demo_key, multi_dataset_fps = load_demo_frames(
+        hdf5_path=args.multi_hdf5_path,
+        demo_index=args.multi_demo_index,
+        cam1_key=args.cam1_key,
+        cam2_key=args.cam2_key,
+    )
+    single_frames, single_demo_key, _ = load_demo_frames(
+        hdf5_path=args.single_hdf5_path,
+        demo_index=args.single_demo_index,
         cam1_key=args.cam1_key,
         cam2_key=args.cam2_key,
     )
@@ -378,8 +407,8 @@ def main():
     model = AutoModel.from_pretrained(args.model_name).to(device).eval()
     processor = AutoImageProcessor.from_pretrained(args.model_name)
 
-    goal_cam1 = to_uint8_rgb(frames[-1]["cam1"])
-    goal_cam2 = to_uint8_rgb(frames[-1]["cam2"])
+    goal_cam1 = to_uint8_rgb(single_frames[-1]["cam1"])
+    goal_cam2 = to_uint8_rgb(single_frames[-1]["cam2"])
 
     goal_patches_batch, input_hw, num_register_tokens, goal_pixel_values_batch = encode_patches(
         [goal_cam1, goal_cam2],
@@ -397,9 +426,13 @@ def main():
     hp, wp = infer_patch_grid(num_patches, input_hw=input_hw, model=model)
 
     print("[Info] model_name:", args.model_name)
-    print("[Info] demo_key:", demo_key)
-    print("[Info] demo_index:", args.demo_index)
-    print("[Info] num_frames:", len(frames))
+    print("[Info] single_hdf5_path:", str(Path(args.single_hdf5_path).expanduser().resolve()))
+    print("[Info] single_demo_key(goal):", single_demo_key)
+    print("[Info] single_demo_index(goal):", args.single_demo_index)
+    print("[Info] multi_hdf5_path:", str(Path(args.multi_hdf5_path).expanduser().resolve()))
+    print("[Info] multi_demo_key(current):", multi_demo_key)
+    print("[Info] multi_demo_index(current):", args.multi_demo_index)
+    print("[Info] num_frames(current):", len(multi_frames))
     print("[Info] R:", num_register_tokens)
     print("[Info] d:", dim)
     print("[Info] N:", num_patches)
@@ -409,13 +442,13 @@ def main():
     print("[Info] agg:", args.agg)
     print("[Info] heat_source:", args.heat_source)
 
-    mp4_fps = int(args.fps) if args.fps is not None else int(dataset_fps)
-    writer = imageio.get_writer(str(out_dir / "attn.mp4"), fps=mp4_fps)
+    mp4_fps = int(args.fps) if args.fps is not None else int(multi_dataset_fps)
+    writer = imageio.get_writer(str(out_dir / "attn_single2multi.mp4"), fps=mp4_fps)
     print("[Info] mp4_fps:", mp4_fps)
 
-    for t in tqdm(range(len(frames)), desc="Rendering heatmaps"):
-        cur_cam1 = to_uint8_rgb(frames[t]["cam1"])
-        cur_cam2 = to_uint8_rgb(frames[t]["cam2"])
+    for t in tqdm(range(len(multi_frames)), desc="Rendering heatmaps"):
+        cur_cam1 = to_uint8_rgb(multi_frames[t]["cam1"])
+        cur_cam2 = to_uint8_rgb(multi_frames[t]["cam2"])
 
         cur_patches_batch, cur_input_hw, _, cur_pixel_values_batch = encode_patches(
             [cur_cam1, cur_cam2],
@@ -469,9 +502,9 @@ def main():
 
     writer.close()
 
-    print(f"[Done] Saved MP4 to: {out_dir / 'attn.mp4'}")
+    print(f"[Done] Saved MP4 to: {out_dir / 'attn_single2multi.mp4'}")
     if args.save_png:
-        print(f"[Done] Saved {len(frames)} PNG frames to: {out_dir}")
+        print(f"[Done] Saved {len(multi_frames)} PNG frames to: {out_dir}")
 
 
 if __name__ == "__main__":
