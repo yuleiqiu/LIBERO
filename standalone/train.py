@@ -324,29 +324,22 @@ def main(cfg: TrainConfig) -> None:
         train_stat_count = 0
         for batch in tqdm(train_loader, desc=f"train epoch {epoch}"):
             if not printed_batch:
-                print(
-                    "[debug] batch structure:",
-                    {
-                        k: (list(v.keys()) if isinstance(v, dict) else type(v))
-                        for k, v in batch.items()
-                    },
+                obs_horizon = next(iter(batch["obs"].values())).shape[1]
+                predict_horizon = batch["actions"].shape[1]
+                action_dim = batch["actions"].shape[2]
+                obs_key_list = list(batch["obs"].keys())
+                action_mask_shape = (
+                    tuple(batch["action_mask"].shape) if "action_mask" in batch else None
                 )
                 print(
-                    "[debug] obs shapes:",
-                    {
-                        k: f"{tuple(v.shape)} # (batch, obs_horizon, obs_dim...)"
-                        for k, v in batch["obs"].items()
-                    },
+                    "[debug] batch:",
+                    f"obs_keys={obs_key_list}, actions={tuple(batch['actions'].shape)}, "
+                    f"action_mask={action_mask_shape}",
                 )
                 print(
-                    "[debug] actions shape:",
-                    f"{tuple(batch['actions'].shape)} # (batch, predict_horizon, action_dim)",
+                    "[debug] horizons:",
+                    f"obs_horizon={obs_horizon}, predict_horizon={predict_horizon}, action_dim={action_dim}",
                 )
-                if "action_mask" in batch:
-                    print(
-                        "[debug] action_mask shape:",
-                        f"{tuple(batch['action_mask'].shape)} # (batch, predict_horizon)",
-                    )
                 printed_batch = True
             for key in batch["obs"]:
                 batch["obs"][key] = batch["obs"][key].to(device)

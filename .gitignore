@@ -12,15 +12,13 @@ clip/
 gpt/
 bert/
 logs/
-standalone/act_standalone/
-standalone/dp_standalone/
 
 *.mp4
 libero.egg-info/
 .vscode/
 .env
+tmp/
 demonstration_data/
-tmp/*.hdf5
-tmp/*.png
-tmp/*.jpg
-tmp/*.jpeg
+standalone/standalone_runs/
+standalone/act_standalone/
+standalone/dp_standalone/

@@ -71,7 +71,7 @@ def _apply_dict_to_obj(obj: Any, data: Mapping[str, Any]) -> None:
 
 
 def apply_config_overrides(cfg: Any, data: Mapping[str, Any]) -> Any:
-    """Apply a nested dict onto a config object."""
+    """Apply a nested dict onto a config object and return it."""
     if isinstance(data, dict):
         _apply_dict_to_obj(cfg, data)
     return cfg
@@ -84,7 +84,7 @@ def load_config_json(path: Path) -> Dict[str, Any]:
 
 
 def _get_by_path(data: Mapping[str, Any], path: str) -> Any:
-    """Get a nested dict value by dotted path."""
+    """Get a nested dict value by dotted path; returns None if missing."""
     current = data
     for key in path.split("."):
         if not isinstance(current, dict):
@@ -122,7 +122,7 @@ def merge_config_overrides(
 
 
 def reject_draccus_config() -> None:
-    """Disable YAML configs; enforce JSON/CLI overrides."""
+    """Error if YAML config is used; only JSON/CLI allowed."""
     config_arg = None
     for idx, arg in enumerate(sys.argv):
         if arg == "--config" and idx + 1 < len(sys.argv):
@@ -227,7 +227,7 @@ def prepare_train_config(cfg: TrainConfig) -> Tuple[TrainConfig, Path, Optional[
 def write_run_metadata(
     save_dir: Path, cfg: Any, cfg_dict: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Write run metadata files and return the config dict."""
+    """Write config, command, and timestamp files to save_dir."""
     if cfg_dict is None:
         cfg_dict = serialize_config(cfg)
     with open(save_dir / TRAIN_CONFIG_NAME, "w") as f:
@@ -283,7 +283,7 @@ def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optiona
 
 
 def resolve_init_states_dir(cfg: Any) -> Path:
-    """Resolve the init states directory from cfg or libero defaults."""
+    """Resolve the init_states directory from cfg or libero defaults."""
     init_dir = getattr(getattr(cfg, "rollout", None), "init_states_dir", None)
     if init_dir is None:
         init_dir = getattr(cfg, "rollout_init_states_dir", None)
@@ -387,7 +387,7 @@ def _get_policy_scheduler_cfg(cfg: Any, policy_name: str) -> Any:
 def build_optimizer(
     cfg: Any, model: torch.nn.Module, policy_name: str
 ) -> torch.optim.Optimizer:
-    """Build an AdamW optimizer with optional ACT backbone param groups."""
+    """Build an AdamW optimizer; ACT may split backbone params."""
     base_opt_cfg = getattr(cfg.training, "optimizer", None)
     policy_opt_cfg = _get_policy_optimizer_cfg(cfg, policy_name)
 
@@ -453,6 +453,7 @@ def build_scheduler(
     base_lrs = [group["lr"] for group in optimizer.param_groups]
 
     def _schedule(step: int) -> float:
+        """Return the learning-rate scale factor for a given step."""
         if warmup_steps > 0 and step < warmup_steps:
             return float(step + 1) / float(max(warmup_steps, 1))
         progress = (step - warmup_steps) / float(max(max_steps - warmup_steps, 1))
@@ -471,6 +472,7 @@ def build_scheduler(
         ]
 
         def _make_lambda(min_factor: float):
+            """Create a schedule function with a minimum lr clamp."""
             return lambda step: max(min_factor, _schedule(step))
 
         lr_lambdas = [_make_lambda(mf) for mf in min_factors]
