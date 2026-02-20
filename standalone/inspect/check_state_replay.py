@@ -9,9 +9,6 @@ Example:
   python standalone/inspect/check_state_replay.py \
       --demo-file path/to/demo.hdf5 \
       --max-demos 2 --max-steps 10 --report-each
-
-Notes:
-- Use --action-shift 1 to test off-by-one action alignment.
 """
 
 import argparse
@@ -51,12 +48,6 @@ def main():
     parser.add_argument("--demo-ids", default="", help="Comma-separated demo ids (e.g., 0,1)")
     parser.add_argument("--max-demos", type=int, default=0, help="Max demos to check (0 = all)")
     parser.add_argument("--max-steps", type=int, default=5, help="Max steps per demo")
-    parser.add_argument(
-        "--action-shift",
-        type=int,
-        default=0,
-        help="Offset into action array when replaying (e.g., 1 tests actions[t+1])",
-    )
     parser.add_argument(
         "--report-action-stats",
         action="store_true",
@@ -100,7 +91,7 @@ def main():
         for demo_key in demo_keys:
             states = data[f"{demo_key}/states"][()]
             actions = data[f"{demo_key}/actions"][()]
-            steps = min(len(actions) - 1 - args.action_shift, args.max_steps)
+            steps = min(len(actions) - 1, args.max_steps)
             if steps <= 0:
                 print(f"{demo_key}: not enough steps to compare")
                 continue
@@ -122,7 +113,7 @@ def main():
             demo_qpos_errors = []
             demo_qvel_errors = []
             for t in range(steps):
-                env.step(actions[t + args.action_shift])
+                env.step(actions[t])
                 state_next = env.env.sim.get_state().flatten()
                 target = states[t + 1]
                 err = float(np.linalg.norm(target - state_next))

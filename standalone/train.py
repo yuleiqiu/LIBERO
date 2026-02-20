@@ -128,7 +128,6 @@ def main(cfg: TrainConfig) -> None:
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
-        action_shift=getattr(cfg.data, "action_shift", 0),
         action_horizon=dp_action_horizon,
         action_start_offset=dp_action_start_offset,
         image_keys=image_keys,

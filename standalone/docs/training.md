@@ -82,7 +82,6 @@ Train config fields (grouped):
 - `data.sync_horizons_from_policy`: when `true`, and only if `data.obs_horizon` /
   `data.predict_horizon` are still at their dataclass defaults, they are synced from
   `policy.dp.model.n_obs_steps` / `policy.dp.model.n_action_steps`.
-- `data.action_shift`: action offset relative to observations.
 - `data.image_norm`: image normalization (`none`, `scale_0_1`, or `imagenet`).
 - `data.image_transforms.*`: optional image augmentation settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.

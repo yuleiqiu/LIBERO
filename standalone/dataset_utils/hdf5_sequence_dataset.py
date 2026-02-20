@@ -15,7 +15,6 @@ class HDF5SequenceDataset(Dataset):
         obs_keys,
         obs_horizon=1,
         predict_horizon=1,
-        action_shift=0,
         action_horizon=None,
         action_start_offset=None,
         action_key="actions",
@@ -28,9 +27,6 @@ class HDF5SequenceDataset(Dataset):
         self.obs_keys = list(obs_keys)
         self.obs_horizon = int(obs_horizon)
         self.predict_horizon = int(predict_horizon)
-        self.action_shift = int(action_shift)
-        if self.action_shift < 0:
-            raise ValueError("action_shift must be >= 0")
         self.action_horizon = int(action_horizon) if action_horizon is not None else None
         self.action_start_offset = (
             int(action_start_offset) if action_start_offset is not None else None
@@ -53,8 +49,7 @@ class HDF5SequenceDataset(Dataset):
                     length = int(demo_group.attrs["num_samples"])
                 else:
                     length = demo_group[action_key].shape[0]
-                max_t = max(0, length - self.action_shift)
-                for t in range(max(0, max_t)):
+                for t in range(max(0, length)):
                     self._indices.append((demo_key, t))
 
     def __len__(self):
@@ -123,7 +118,7 @@ class HDF5SequenceDataset(Dataset):
                 arr = self._process_image(arr)
             obs[key] = arr
 
-        action_start = t + self.action_shift
+        action_start = t
         action_horizon = self.predict_horizon
         if self.action_horizon is not None:
             action_horizon = self.action_horizon

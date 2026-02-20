@@ -90,7 +90,6 @@ def main():
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
         predict_horizon=cfg.data.predict_horizon,
-        action_shift=getattr(cfg.data, "action_shift", 0),
     )
     loader = DataLoader(
         dataset,
