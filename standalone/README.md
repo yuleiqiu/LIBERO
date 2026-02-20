@@ -5,7 +5,6 @@ Docs live under `standalone/docs`:
 - `standalone/docs/training.md`
 - `standalone/docs/policy_dp.md`
 - `standalone/docs/policy_act.md`
-- `standalone/docs/policy_cnnmlp.md`
 
 This folder hosts the training/rollout pipeline plus reusable model components.
 The goal is to keep algorithm internals separate from policy wrappers so we can
@@ -32,7 +31,7 @@ swap or migrate algorithms with minimal friction.
   Shared building blocks (legacy; will shrink as encoders/algos mature).
 
 - `models/algos/`  
-  Algorithm implementations (e.g., `models/algos/act/`, `models/algos/cnnmlp/`, `models/algos/dp/`).
+  Algorithm implementations (e.g., `models/algos/act/`, `models/algos/dp/`).
 
 - `dp_standalone/`  
   Legacy or reference code; keep here only when needed for comparison.
@@ -151,18 +150,4 @@ python standalone/rollout_env.py \
   --num_procs=9 \
   --save_videos 90 \
   --video_dir=standalone/standalone_runs/train_act/run_003/eval_single
-```
-
-## Example Commands (CNNMLP)
-
-```bash
-python standalone/train.py \
-  --policy.name=cnnmlp \
-  --policy.cnnmlp.model.hidden_dim=256 \
-  --data.image_norm=imagenet \
-  --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
-  --data.predict_horizon=100 \
-  --paths.save_dir=standalone/standalone_runs/train_cnnmlp \
-  --training.batch_size=128 \
-  --training.epochs=100
 ```

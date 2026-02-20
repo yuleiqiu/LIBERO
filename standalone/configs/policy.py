@@ -81,38 +81,6 @@ class ACTConfig:
 
 
 @dataclass
-class CNNMLPModelConfig:
-    """Model config for CNNMLP; pretrained/dilation control ResNet backbone weights/stride."""
-    backbone: str = "resnet18"
-    pretrained: bool = False
-    hidden_dim: int = 256
-    position_embedding: str = "sine"
-    dilation: bool = False
-    action_dim: Optional[int] = None
-    qpos_dim: Optional[int] = None
-    chunk_size: int = 400
-    camera_names: List[str] = field(default_factory=list)
-
-
-@dataclass
-class CNNMLPConfig:
-    exec_horizon: Optional[int] = None
-    lr_backbone: float = 1e-5
-    model: CNNMLPModelConfig = field(default_factory=CNNMLPModelConfig)
-    optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
-    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
-
-    def cnnmlp_config_dict(self):
-        data = asdict(self)
-        data.pop("exec_horizon", None)
-        data.pop("optimizer", None)
-        return data
-
-    def act_config_dict(self):
-        return self.cnnmlp_config_dict()
-
-
-@dataclass
 class DiffusionModelConfig:
     horizon: Optional[int] = 16
     n_action_steps: Optional[int] = 8
@@ -157,9 +125,8 @@ class DiffusionConfig:
 
 @dataclass
 class PolicyConfig:
-    name: str = "cnnmlp"
+    name: str = "act"
     act: ACTConfig = field(default_factory=ACTConfig)
-    cnnmlp: CNNMLPConfig = field(default_factory=CNNMLPConfig)
     dp: DiffusionConfig = field(default_factory=DiffusionConfig)
 
 
@@ -177,8 +144,6 @@ def resolve_policy_config(cfg):
     policy_name = str(getattr(policy_cfg, "name", "")).lower()
     if policy_name == "act":
         return policy_cfg.act
-    if policy_name == "cnnmlp":
-        return policy_cfg.cnnmlp
     if policy_name == "dp":
         return policy_cfg.dp
     raise ValueError(f"unsupported policy: {policy_name}")
@@ -191,8 +156,6 @@ def get_policy_param(cfg, key, default=None):
         return default
     if key == "act_config":
         return resolved.act_config_dict()
-    if key == "cnnmlp_config":
-        return resolved.cnnmlp_config_dict()
     if key == "dp_config":
         return resolved.dp_config_dict()
     if key == "encoder_config":
@@ -207,8 +170,6 @@ def serialize_policy_config(cfg):
     policy_name = str(getattr(policy_cfg, "name", "")).lower()
     if policy_name == "act":
         return {"name": policy_cfg.name, "act": asdict(policy_cfg.act)}
-    if policy_name == "cnnmlp":
-        return {"name": policy_cfg.name, "cnnmlp": asdict(policy_cfg.cnnmlp)}
     if policy_name == "dp":
         return {"name": policy_cfg.name, "dp": asdict(policy_cfg.dp)}
     return {"name": policy_cfg.name}

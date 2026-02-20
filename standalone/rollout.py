@@ -48,7 +48,7 @@ def main(cfg: RolloutConfig):
     sample = dataset[cfg.sample_index]
     action_dim = sample["actions"].shape[-1]
     print(f"[debug] action_dim: {action_dim}")
-    if policy_name not in ("act", "cnnmlp", "dp"):
+    if policy_name not in ("act", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
     proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
     for key in image_keys:

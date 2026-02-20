@@ -1,6 +1,6 @@
 # Train Script (standalone/train.py)
 
-This script trains ACT or CNNMLP policies from HDF5 demonstrations using
+This script trains ACT or Diffusion Policy (DP) policies from HDF5 demonstrations using
 dataclass defaults plus CLI overrides. YAML configs are no longer supported.
 
 ## Quick start
@@ -12,16 +12,6 @@ python standalone/train.py \
   --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
   --policy.name=act \
   --paths.save_dir=standalone/standalone_runs/train_act_quickcheck
-```
-
-CNNMLP example:
-
-```bash
-python standalone/train.py \
-  --data.demo_file=./libero/datasets/libero_object_single/pick_up_the_alphabet_soup_and_place_it_in_the_basket_demo.hdf5 \
-  --policy.name=cnnmlp \
-  --policy.cnnmlp.model.hidden_dim=256 \
-  --paths.save_dir=standalone/standalone_runs/train_cnnmlp_quickcheck
 ```
 
 Diffusion Policy example (DP encoder with SpatialSoftmax + GroupNorm):
@@ -86,11 +76,9 @@ Train config fields (grouped):
 - `data.image_transforms.*`: optional image augmentation settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
-- `policy.name`: policy type (`act`, `cnnmlp`, or `dp`).
+- `policy.name`: policy type (`act` or `dp`).
 - `policy.act.model.*`: ACT model overrides (e.g., `policy.act.model.enc_layers`).
 - `policy.act.kl_weight`, `policy.act.lr_backbone`: ACT wrapper settings.
-- `policy.cnnmlp.model.*`: CNNMLP model overrides.
-- `policy.cnnmlp.lr_backbone`: CNNMLP wrapper settings.
 - `policy.dp.action_horizon`: DP-only action slicing length for training data (optional).
 - `policy.dp.action_start_offset`: DP-only action slicing offset (optional); if unset and
   `action_horizon` is provided, defaults to `-(data.obs_horizon - 1)`.
@@ -154,7 +142,7 @@ Each run directory stores:
   as-is (no auto-increment).
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
 - Policy configs are dataclass-backed; set `policy.name` and override
-  `policy.act.model.*` / `policy.cnnmlp.model.*` as needed.
+  `policy.act.model.*` / `policy.dp.*` as needed.
 - `resume: true` loads `train_config.json` from `paths.save_dir` (or `saved_config_path`),
   and `saved_config_path` alone can be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`
@@ -213,10 +201,10 @@ Typical command:
 
 ```bash
 python standalone/rollout_env.py \
-  ckpt=standalone/standalone_runs/train_cnnmlp_quickcheck/run_000/model_last.pt \
+  ckpt=standalone/standalone_runs/train_act_quickcheck/run_000/model_last.pt \
   steps=1000 n_rollouts=90 warmup_steps=10 use_mp=true num_procs=10 \
   save_videos=90 video_camera=agentview_rgb,eye_in_hand_rgb \
-  video_dir=standalone/standalone_runs/train_cnnmlp_quickcheck/run_000/rollout_on_test_init
+  video_dir=standalone/standalone_runs/train_act_quickcheck/run_000/rollout_on_test_init
 ```
 
 Notes:

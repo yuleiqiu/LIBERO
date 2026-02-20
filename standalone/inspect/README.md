@@ -8,18 +8,18 @@ side-by-side video (two rows, two cameras per row).
 
 ```bash
 python standalone/inspect/compare_act_actions.py \
-  --ckpt standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt \
+  --ckpt standalone/standalone_runs/run_act_quickcheck/model_last.pt \
   --demo-file libero/datasets/processed/<task>_demo.hdf5 \
-  --config standalone/standalone_runs/run_cnnmlp_quickcheck/train_config.json \
+  --config standalone/standalone_runs/run_act_quickcheck/train_config.json \
   --init-idxs 0,5 --warmup-steps 0
 ```
 
 Video mode:
 ```bash
 python standalone/inspect/compare_act_actions.py \
-  --ckpt standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt \
+  --ckpt standalone/standalone_runs/run_act_quickcheck/model_last.pt \
   --demo-file libero/datasets/processed/<task>_demo.hdf5 \
-  --config standalone/standalone_runs/run_cnnmlp_quickcheck/train_config.json \
+  --config standalone/standalone_runs/run_act_quickcheck/train_config.json \
   --init-idxs 0,1 --video-out tmp/compare.mp4 --video-steps 60
 ```
 
@@ -37,7 +37,7 @@ Reports model error vs a mean-action baseline (overall + per-dim).
 
 ```bash
 python standalone/inspect/check_action_fit.py \
-  --ckpt standalone/standalone_runs/run_cnnmlp_quickcheck/model_last.pt \
+  --ckpt standalone/standalone_runs/run_act_quickcheck/model_last.pt \
   --demo-file libero/datasets/processed/<task>_demo.hdf5 \
-  --config standalone/standalone_runs/run_cnnmlp_quickcheck/train_config.json
+  --config standalone/standalone_runs/run_act_quickcheck/train_config.json
 ```

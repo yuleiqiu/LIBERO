@@ -480,7 +480,7 @@ def main(cfg: RolloutConfig):
     )
     print(f"[debug] action_dim: {action_dim}")
 
-    if policy_name not in ("act", "cnnmlp", "dp"):
+    if policy_name not in ("act", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
     model = build_policy(
         cfg,

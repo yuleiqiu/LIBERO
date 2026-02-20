@@ -1,6 +1,5 @@
 from standalone.configs import resolve_policy_config
 from standalone.models.policy.act_policy import ACTPolicy
-from standalone.models.policy.cnnmlp_policy import CNNMLPPolicy
 from standalone.models.policy.diffusion_policy import DiffusionPolicy
 
 
@@ -27,19 +26,6 @@ def build_policy(cfg, obs_keys, image_keys, action_dim, proprio_dim=None, obs_sh
             proprio_dim=proprio_dim,
             action_dim=action_dim,
             act_config=resolved.act_config_dict(),
-        )
-    if policy_name == "cnnmlp":
-        if proprio_dim is None:
-            raise ValueError("proprio_dim is required for CNNMLP policy")
-        return CNNMLPPolicy(
-            obs_keys=obs_keys,
-            image_keys=image_keys,
-            obs_horizon=cfg.data.obs_horizon,
-            predict_horizon=cfg.data.predict_horizon,
-            exec_horizon=resolved.exec_horizon,
-            qpos_dim=proprio_dim,
-            action_dim=action_dim,
-            cnnmlp_config=resolved.cnnmlp_config_dict(),
         )
     if policy_name == "dp":
         if obs_shapes is None:

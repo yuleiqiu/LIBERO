@@ -19,7 +19,6 @@ from standalone.configs import DataConfig, apply_policy_config, get_policy_param
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME
 from standalone.dataset_utils.hdf5_sequence_dataset import HDF5SequenceDataset
 from standalone.models.policy.act_policy import ACTPolicy
-from standalone.models.policy.cnnmlp_policy import CNNMLPPolicy
 from standalone.rollout_env import (
     ObsHistory,
     build_obs_key_mapping,
@@ -227,17 +226,6 @@ def main():
             proprio_dim=proprio_dim,
             action_dim=action_dim,
             act_config=get_policy_param(cfg, "act_config"),
-        )
-    elif policy_name == "cnnmlp":
-        model = CNNMLPPolicy(
-            obs_keys=obs_keys,
-            image_keys=image_keys,
-            obs_horizon=cfg.data.obs_horizon,
-            predict_horizon=cfg.data.predict_horizon,
-            exec_horizon=exec_horizon,
-            qpos_dim=proprio_dim,
-            action_dim=action_dim,
-            cnnmlp_config=get_policy_param(cfg, "cnnmlp_config"),
         )
     else:
         raise ValueError(f"unsupported policy: {policy_name}")

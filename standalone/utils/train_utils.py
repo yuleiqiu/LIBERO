@@ -366,8 +366,6 @@ def _get_policy_optimizer_cfg(cfg: Any, policy_name: str) -> Any:
     """Return the optimizer config for a policy name."""
     if policy_name == "act":
         return getattr(cfg.policy.act, "optimizer", None)
-    if policy_name == "cnnmlp":
-        return getattr(cfg.policy.cnnmlp, "optimizer", None)
     if policy_name == "dp":
         return getattr(cfg.policy.dp, "optimizer", None)
     return None
@@ -377,8 +375,6 @@ def _get_policy_scheduler_cfg(cfg: Any, policy_name: str) -> Any:
     """Return the scheduler config for a policy name."""
     if policy_name == "act":
         return getattr(cfg.policy.act, "scheduler", None)
-    if policy_name == "cnnmlp":
-        return getattr(cfg.policy.cnnmlp, "scheduler", None)
     if policy_name == "dp":
         return getattr(cfg.policy.dp, "scheduler", None)
     return None

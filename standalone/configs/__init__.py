@@ -9,7 +9,6 @@ from standalone.configs.encoder import (
 from standalone.configs.normalizer import NormalizerConfig
 from standalone.configs.policy import (
     ACTConfig,
-    CNNMLPConfig,
     DiffusionConfig,
     DiffusionModelConfig,
     PolicyConfig,
@@ -39,7 +38,6 @@ __all__ = [
     "NormalizerConfig",
     "PolicyConfig",
     "ACTConfig",
-    "CNNMLPConfig",
     "DiffusionConfig",
     "DiffusionModelConfig",
     "PathsConfig",
