@@ -17,6 +17,8 @@ matplotlib>=3.5.3
 cloudpickle>=2.0.0
 opencv-python
 wandb
+pynput
+hidapi
 
 # gym: be explicit about compatible range (avoid gym0.27 breaking changes)
 gym>=0.25,<0.27
