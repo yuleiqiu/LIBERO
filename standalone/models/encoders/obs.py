@@ -13,13 +13,11 @@ class ObsEncoder(nn.Module):
         lowdim_keys,
         image_encoder=None,
         lowdim_encoder=None,
-        image_fusion="concat",
         output_dim=None,
     ):
         super().__init__()
         self.image_keys = list(image_keys or [])
         self.lowdim_keys = list(lowdim_keys or [])
-        self.image_fusion = str(image_fusion)
         self.image_encoder = image_encoder
         self.lowdim_encoder = lowdim_encoder
         self.output_dim = None
@@ -57,13 +55,7 @@ class ObsEncoder(nn.Module):
             if lowdim_dim <= 0:
                 raise ValueError("lowdim_encoder must define output_dim")
 
-        if self.image_keys:
-            if self.image_fusion == "mean":
-                fused_image_dim = image_dim
-            else:
-                fused_image_dim = image_dim * len(self.image_keys)
-        else:
-            fused_image_dim = 0
+        fused_image_dim = image_dim * len(self.image_keys) if self.image_keys else 0
 
         total_dim = fused_image_dim + lowdim_dim
         if total_dim <= 0:
@@ -109,11 +101,8 @@ class ObsEncoder(nn.Module):
                         raise KeyError(f"missing image key: {key}")
                     x = self._to_image_tensor(obs[key])
                     image_feats.append(self.image_encoder(x))
-            if self.image_fusion == "mean":
-                fused = torch.stack(image_feats, dim=0).mean(dim=0)
-            else:
-                fused = torch.cat(image_feats, dim=-1)
-            features.append(fused)
+            fused_image = torch.cat(image_feats, dim=-1)
+            features.append(fused_image)
 
         if self.lowdim_keys:
             parts = []
@@ -249,7 +238,6 @@ def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None):
         lowdim_keys=lowdim_keys,
         image_encoder=image_encoder,
         lowdim_encoder=lowdim_encoder,
-        image_fusion=fusion_cfg.get("image_fusion", "concat"),
         output_dim=fusion_cfg.get("output_dim"),
     )
     return obs_encoder

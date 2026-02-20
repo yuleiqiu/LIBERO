@@ -34,7 +34,6 @@ class LowdimEncoderConfig:
 
 @dataclass
 class ObsEncoderFusionConfig:
-    image_fusion: str = "concat"
     output_dim: Optional[int] = None
 
 
