@@ -9,10 +9,7 @@ except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
 from standalone.configs import RolloutConfig, apply_policy_config
-from standalone.dataset_utils.hdf5_sequence_dataset import (
-    HDF5SequenceDataset,
-    load_obs_stats,
-)
+from standalone.dataset_utils.hdf5_sequence_dataset import HDF5SequenceDataset
 from standalone.dataset_utils.normalizer_utils import build_identity_normalizer
 from standalone.models.algos.dp.utils.normalizer import LinearNormalizer
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
@@ -48,18 +45,6 @@ def main(cfg: RolloutConfig):
     )
 
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    obs_stats = None
-    if policy_name not in ("act", "cnnmlp", "dp"):
-        if cfg.data.obs_stats_path:
-            obs_stats = load_obs_stats(cfg.data.obs_stats_path)
-        elif isinstance(ckpt, dict) and ckpt.get("obs_stats") is not None:
-            obs_stats = ckpt["obs_stats"]
-        if obs_stats is not None and image_keys:
-            for key in image_keys:
-                obs_stats.pop(key, None)
-        if obs_stats is not None:
-            dataset.set_obs_stats(obs_stats)
-
     sample = dataset[cfg.sample_index]
     action_dim = sample["actions"].shape[-1]
     print(f"[debug] action_dim: {action_dim}")

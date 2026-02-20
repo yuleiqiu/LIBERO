@@ -66,8 +66,6 @@ class DataConfig:
     action_shift: int = 0  # Offset actions relative to obs; 1 means predict next-step actions.
     image_norm: str = "none"
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
-    normalize_obs: bool = False
-    obs_stats_path: Optional[str] = None
     obs_key_mapping: Optional[Dict[str, str]] = None
     train_ratio: float = 0.9
     val_ratio: float = 0.1

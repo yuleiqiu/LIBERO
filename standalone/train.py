@@ -3,7 +3,6 @@ from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -16,12 +15,7 @@ except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
 from standalone.configs import TrainConfig, serialize_policy_config
-from standalone.dataset_utils.hdf5_sequence_dataset import (
-    HDF5SequenceDataset,
-    compute_obs_stats,
-    load_obs_stats,
-    save_obs_stats,
-)
+from standalone.dataset_utils.hdf5_sequence_dataset import HDF5SequenceDataset
 from standalone.dataset_utils.normalizer_utils import (
     build_identity_normalizer,
     build_linear_normalizer,
@@ -81,9 +75,6 @@ def main(cfg: TrainConfig) -> None:
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     all_keys = obs_keys + image_keys
     policy_name = get_policy_name(cfg)
-    if policy_name in ("act", "cnnmlp", "dp") and cfg.data.normalize_obs:
-        print("[warn] ACT/CNNMLP/DP policy ignores obs normalization; disabling normalize_obs.")
-        cfg.data.normalize_obs = False
     split_path = save_dir / "split_indices.json"
 
     device = cfg.training.device if torch.cuda.is_available() else "cpu"
@@ -157,25 +148,6 @@ def main(cfg: TrainConfig) -> None:
                 "split/val_size": len(val_idx),
             }
         )
-
-    obs_stats = None
-    if cfg.data.normalize_obs:
-        stats_path = (
-            Path(cfg.data.obs_stats_path).expanduser().resolve()
-            if cfg.data.obs_stats_path
-            else save_dir / "obs_stats.json"
-        )
-        if stats_path.exists():
-            obs_stats = load_obs_stats(stats_path)
-        else:
-            obs_stats = compute_obs_stats(
-                base_dataset, train_idx, ignore_keys=image_keys
-            )
-            save_obs_stats(stats_path, obs_stats)
-        if obs_stats is not None and image_keys:
-            for key in image_keys:
-                obs_stats.pop(key, None)
-        base_dataset.set_obs_stats(obs_stats)
 
     train_dataset = Subset(base_dataset, train_idx)
     val_dataset = Subset(base_dataset, val_idx)
@@ -415,7 +387,6 @@ def main(cfg: TrainConfig) -> None:
                 model,
                 obs_keys,
                 image_keys,
-                obs_stats,
                 demo_path,
                 action_dim,
                 rollout_state["image_shapes"],
@@ -458,7 +429,7 @@ def main(cfg: TrainConfig) -> None:
 
         if should_save:
             torch.save(
-                {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                {"model": _model_state_for_ckpt(), **ckpt_extra},
                 last_ckpt_path,
             )
             final_ckpt_path = last_ckpt_path
@@ -474,7 +445,7 @@ def main(cfg: TrainConfig) -> None:
                 if len(topk_records) < save_topk:
                     ckpt_path = save_dir / f"model_topk_epoch_{epoch:03d}.pt"
                     torch.save(
-                        {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                        {"model": _model_state_for_ckpt(), **ckpt_extra},
                         ckpt_path,
                     )
                     topk_records.append(
@@ -492,7 +463,7 @@ def main(cfg: TrainConfig) -> None:
                             Path(worst_path).unlink()
                         ckpt_path = save_dir / f"model_topk_epoch_{epoch:03d}.pt"
                         torch.save(
-                            {"model": _model_state_for_ckpt(), "obs_stats": obs_stats, **ckpt_extra},
+                            {"model": _model_state_for_ckpt(), **ckpt_extra},
                             ckpt_path,
                         )
                         topk_records[worst_idx] = {

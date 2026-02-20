@@ -5,13 +5,31 @@ from tqdm import tqdm
 
 
 class VideoWriter:
-    def __init__(self, video_path, save_video=False, fps=30, single_video=True):
+    def __init__(
+        self,
+        video_path,
+        save_video=False,
+        fps=30,
+        single_video=True,
+        stream_write=False,
+    ):
         self.video_path = video_path
         self.save_video = save_video
         self.fps = fps
         self.image_buffer = {}
         self.last_images = {}
         self.single_video = single_video
+        self.stream_write = bool(stream_write) and not bool(single_video)
+        self.stream_writers = {}
+
+    def _video_name(self, idx):
+        return os.path.join(self.video_path, f"{idx}.mp4")
+
+    def _get_stream_writer(self, idx):
+        if idx not in self.stream_writers:
+            os.makedirs(self.video_path, exist_ok=True)
+            self.stream_writers[idx] = imageio.get_writer(self._video_name(idx), fps=self.fps)
+        return self.stream_writers[idx]
 
     def __enter__(self):
         return self
@@ -22,15 +40,16 @@ class VideoWriter:
     def append_image(self, img, idx=0):
         """Directly append an image to the video."""
         if self.save_video:
-            if idx not in self.image_buffer:
-                self.image_buffer[idx] = []
-            self.image_buffer[idx].append(img)
+            if self.stream_write:
+                self._get_stream_writer(idx).append_data(img)
+            else:
+                if idx not in self.image_buffer:
+                    self.image_buffer[idx] = []
+                self.image_buffer[idx].append(img)
 
     def append_obs(self, obs, done, idx=0, camera_name="agentview_image"):
         """Append a camera observation to the video."""
         if self.save_video:
-            if idx not in self.image_buffer:
-                self.image_buffer[idx] = []
             # Always record the actual frame; no end-of-episode tinting.
             if isinstance(camera_name, (list, tuple)):
                 frames = []
@@ -47,7 +66,15 @@ class VideoWriter:
             else:
                 frame = obs[camera_name][::-1]
             self.last_images[idx] = frame
-            self.image_buffer[idx].append(frame)
+            if self.stream_write:
+                self._get_stream_writer(idx).append_data(frame)
+                if done and idx in self.stream_writers:
+                    self.stream_writers[idx].close()
+                    del self.stream_writers[idx]
+            else:
+                if idx not in self.image_buffer:
+                    self.image_buffer[idx] = []
+                self.image_buffer[idx].append(frame)
 
     def reset(self):
         if self.save_video:
@@ -60,6 +87,12 @@ class VideoWriter:
 
     def save(self):
         if self.save_video:
+            if self.stream_write:
+                for writer in self.stream_writers.values():
+                    writer.close()
+                self.stream_writers = {}
+                print(f"Saved videos to {self.video_path}.")
+                return
             os.makedirs(self.video_path, exist_ok=True)
             total_videos = 1 if self.single_video else len(self.image_buffer)
             with tqdm(total=total_videos, desc="writing videos", unit="video") as pbar:

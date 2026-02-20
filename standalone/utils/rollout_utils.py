@@ -133,6 +133,63 @@ def read_init_states_from_hdf5(hdf5_path: str) -> np.ndarray:
     return np.stack(init_states, axis=0)
 
 
+def infer_rollout_io_specs(
+    hdf5_path: str,
+    obs_keys: Sequence[str],
+    image_keys: Sequence[str],
+    obs_horizon: int,
+    action_key: str = "actions",
+) -> Tuple[int, Dict[str, Tuple[int, ...]], Dict[str, Tuple[int, ...]], int]:
+    """Infer rollout model IO specs from HDF5 without building dataset indices."""
+
+    def demo_sort_key(name: str) -> Union[int, str]:
+        try:
+            return int(name.split("_")[1])
+        except Exception:
+            return name
+
+    obs_horizon = int(obs_horizon)
+    if obs_horizon <= 0:
+        raise ValueError("obs_horizon must be >= 1")
+
+    required = list(obs_keys) + list(image_keys)
+    with h5py.File(hdf5_path, "r") as f:
+        data = f["data"]
+        demo_keys = [k for k in data.keys() if k.startswith("demo_")]
+        if not demo_keys:
+            demo_keys = list(data.keys())
+        demo_keys = sorted(demo_keys, key=demo_sort_key)
+        if not demo_keys:
+            raise ValueError(f"No demo groups found under 'data' in {hdf5_path}")
+        demo_group = data[demo_keys[0]]
+
+        if action_key not in demo_group:
+            raise KeyError(f"action key not found in demo group: {action_key}")
+        actions = demo_group[action_key]
+        if actions.ndim != 2:
+            raise ValueError(f"expected action shape [T, A], got {actions.shape}")
+        action_dim = int(actions.shape[-1])
+
+        if "obs" not in demo_group:
+            raise KeyError("obs group not found in demo group")
+        obs_group = demo_group["obs"]
+        obs_shapes: Dict[str, Tuple[int, ...]] = {}
+        image_shapes: Dict[str, Tuple[int, ...]] = {}
+        for key in required:
+            if key not in obs_group:
+                raise KeyError(f"obs key not found in hdf5 demo: {key}")
+            ds = obs_group[key]
+            if ds.ndim < 2:
+                raise ValueError(f"expected obs shape [T, ...], got {ds.shape} for key {key}")
+            shape = (obs_horizon,) + tuple(int(v) for v in ds.shape[1:])
+            obs_shapes[key] = shape
+            if key in image_keys:
+                image_shapes[key] = shape[1:]
+
+    proprio_dim = int(sum(np.prod(obs_shapes[k][1:]) for k in obs_keys))
+    return action_dim, image_shapes, obs_shapes, proprio_dim
+
+
 def load_init_states(cfg: Any, demo_path: Path) -> np.ndarray:
     """Load init states from cfg.init_states or fall back to HDF5."""
     init_states_path = getattr(cfg, "init_states", None)

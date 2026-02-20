@@ -85,7 +85,6 @@ Train config fields (grouped):
 - `data.action_shift`: action offset relative to observations.
 - `data.image_norm`: image normalization (`none`, `scale_0_1`, or `imagenet`).
 - `data.image_transforms.*`: optional image augmentation settings.
-- `data.normalize_obs`, `data.obs_stats_path`: observation normalization settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
 - `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
 - `policy.name`: policy type (`act`, `cnnmlp`, or `dp`).
@@ -132,14 +131,11 @@ Each run directory stores:
 - `split_indices.json`: train/val split indices
 - `model_last.pt`: latest checkpoint (always saved when save logic triggers)
 - `model_topk_epoch_###.pt`: top-K checkpoints by success rate (saved when enabled)
-- `obs_stats.json`: only when `data.normalize_obs` is enabled
 - `rollout_videos/`: only when rollouts are enabled (training uses `val/epoch_###`,
   post-training defaults to `eval/`)
 
 ## Notes
 
-- ACT/CNNMLP ignore observation normalization; `normalize_obs` is disabled
-  automatically for these policies.
 - Image normalization is applied in the dataset via `data.image_norm`.
 - DP action slicing: when `policy.dp.action_horizon` (or `policy.dp.action_start_offset`)
   is set, the dataset pads action sequences and exposes `action_mask`. Training

@@ -27,6 +27,7 @@ from standalone.rollout_env import (
     camera_names_from_mapping,
     extract_env_obs,
     infer_camera_size,
+    infer_rollout_io_specs,
     load_anchor_indices,
     load_init_states,
     read_bddl_from_hdf5,
@@ -38,10 +39,6 @@ from standalone.rollout_env import (
     write_rollout_summary,
 )
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
-from standalone.dataset_utils.hdf5_sequence_dataset import (
-    HDF5SequenceDataset,
-    load_obs_stats,
-)
 from standalone.dataset_utils.normalizer_utils import build_identity_normalizer
 from standalone.models.algos.dp.utils.normalizer import LinearNormalizer
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
@@ -321,7 +318,6 @@ def run_env_rollouts(
     model,
     obs_keys,
     image_keys,
-    obs_stats,
     demo_path,
     action_dim,
     image_shapes,
@@ -402,6 +398,7 @@ def run_env_rollouts(
                 save_video=True,
                 fps=int(getattr(cfg, "video_fps", 30)),
                 single_video=False,
+                stream_write=True,
             )
 
     total_states = init_states.shape[0]
@@ -850,7 +847,6 @@ def main(cfg: SegRolloutConfig):
         raise ValueError("data.demo_file is required")
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
-    all_keys = obs_keys + image_keys
     policy_name = get_policy_name(cfg)
 
     demo_path = Path(cfg.data.demo_file).expanduser().resolve()
@@ -859,43 +855,16 @@ def main(cfg: SegRolloutConfig):
 
     device = cfg.device if torch.cuda.is_available() else "cpu"
 
-    dataset = HDF5SequenceDataset(
+    action_dim, image_shapes, obs_shapes, proprio_dim = infer_rollout_io_specs(
         hdf5_path=str(demo_path),
-        obs_keys=all_keys,
-        obs_horizon=cfg.data.obs_horizon,
-        predict_horizon=cfg.data.predict_horizon,
-        action_shift=getattr(cfg.data, "action_shift", 0),
+        obs_keys=obs_keys,
         image_keys=image_keys,
-        image_norm=cfg.data.image_norm,
-        image_transforms=None,
+        obs_horizon=cfg.data.obs_horizon,
     )
-
-    obs_stats = None
-    if policy_name not in ("act", "cnnmlp", "dp"):
-        if cfg.data.obs_stats_path:
-            obs_stats = load_obs_stats(cfg.data.obs_stats_path)
-        elif isinstance(ckpt, dict) and ckpt.get("obs_stats") is not None:
-            obs_stats = ckpt["obs_stats"]
-        if obs_stats is not None and image_keys:
-            for key in image_keys:
-                obs_stats.pop(key, None)
-        if obs_stats is not None:
-            dataset.set_obs_stats(obs_stats)
-
-    sample = dataset[0]
-    action_dim = sample["actions"].shape[-1]
     print(f"[debug] action_dim: {action_dim}")
-
-    image_shapes = {}
-    for key in image_keys:
-        if key not in sample["obs"]:
-            raise KeyError(f"image key not found in obs: {key}")
-        image_shapes[key] = sample["obs"][key].shape[1:]
 
     if policy_name not in ("act", "cnnmlp", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
-    proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
-    obs_shapes = {key: value.shape for key, value in sample["obs"].items()}
     model = build_policy(
         cfg,
         obs_keys,
@@ -931,7 +900,6 @@ def main(cfg: SegRolloutConfig):
         model,
         obs_keys,
         image_keys,
-        obs_stats,
         demo_path,
         action_dim,
         image_shapes,

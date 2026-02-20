@@ -45,7 +45,13 @@ class ControlEnv:
             bddl_file_name
         ), f"[error] {bddl_file_name} does not exist!"
 
-        controller_configs = suite.load_controller_config(default_controller=controller)
+        # Allow caller-provided controller configs from kwargs (e.g. dataset env_kwargs)
+        # and only fall back to the default controller preset when absent.
+        controller_configs = kwargs.pop("controller_configs", None)
+        if controller_configs is None:
+            controller_configs = suite.load_controller_config(
+                default_controller=controller
+            )
 
         problem_info = BDDLUtils.get_problem_info(bddl_file_name)
         # Check if we're using a multi-armed environment and use env_configuration argument if so

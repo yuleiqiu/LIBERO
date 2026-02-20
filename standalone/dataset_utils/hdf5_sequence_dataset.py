@@ -1,12 +1,9 @@
-import json
-import os
 from pathlib import Path
 
 import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
 
 from standalone.dataset_utils.image_normalization import normalize_images
 
@@ -23,7 +20,6 @@ class HDF5SequenceDataset(Dataset):
         action_start_offset=None,
         action_key="actions",
         demos=None,
-        obs_stats=None,
         image_keys=None,
         image_norm="none",
         image_transforms=None,
@@ -42,7 +38,6 @@ class HDF5SequenceDataset(Dataset):
         self.action_key = action_key
         self._h5 = None
         self._indices = []
-        self._obs_stats = obs_stats
         self.image_keys = set(image_keys or [])
         self.image_norm = str(image_norm or "none").lower()
         self._image_transforms_cfg = image_transforms
@@ -64,9 +59,6 @@ class HDF5SequenceDataset(Dataset):
 
     def __len__(self):
         return len(self._indices)
-
-    def set_obs_stats(self, obs_stats):
-        self._obs_stats = obs_stats
 
     def set_image_transforms_enabled(self, enabled: bool):
         self._image_transforms_enabled = bool(enabled)
@@ -162,74 +154,4 @@ class HDF5SequenceDataset(Dataset):
         if valid_len > 0:
             action_mask[pad_front : pad_front + valid_len] = 1.0
 
-        if self._obs_stats is not None:
-            for key, value in obs.items():
-                stats = self._obs_stats.get(key)
-                if stats is None:
-                    continue
-                mean = stats["mean"]
-                std = stats["std"]
-                obs[key] = (value - mean) / std
-
         return {"obs": obs, "actions": actions, "action_mask": action_mask}
-
-
-def save_obs_stats(path, stats):
-    path = Path(path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serializable = {
-        key: {"mean": value["mean"].tolist(), "std": value["std"].tolist()}
-        for key, value in stats.items()
-    }
-    with open(path, "w") as f:
-        json.dump(serializable, f, indent=2)
-
-
-def load_obs_stats(path):
-    path = Path(path).expanduser().resolve()
-    with open(path, "r") as f:
-        stats_json = json.load(f)
-    return {
-        key: {
-            "mean": np.array(value["mean"], dtype=np.float32),
-            "std": np.array(value["std"], dtype=np.float32),
-        }
-        for key, value in stats_json.items()
-    }
-
-
-def compute_obs_stats(dataset, indices, eps=1e-3, ignore_keys=None):
-    sums = {}
-    sumsq = {}
-    counts = {}
-    ignore_keys = set(ignore_keys or [])
-    restore_transforms = None
-    if hasattr(dataset, "set_image_transforms_enabled"):
-        restore_transforms = dataset.image_transforms_enabled()
-        dataset.set_image_transforms_enabled(False)
-
-    try:
-        for idx in tqdm(indices, desc="compute obs stats", leave=True):
-            sample = dataset[idx]
-            for key, value in sample["obs"].items():
-                if key in ignore_keys:
-                    continue
-                value = value.astype(np.float32, copy=False)
-                sums.setdefault(key, 0.0)
-                sumsq.setdefault(key, 0.0)
-                counts.setdefault(key, 0)
-                sums[key] = sums[key] + value.sum(axis=0)
-                sumsq[key] = sumsq[key] + (value * value).sum(axis=0)
-                counts[key] = counts[key] + value.shape[0]
-    finally:
-        if restore_transforms is not None:
-            dataset.set_image_transforms_enabled(restore_transforms)
-
-    stats = {}
-    for key in sums:
-        mean = sums[key] / counts[key]
-        var = sumsq[key] / counts[key] - mean * mean
-        var = np.maximum(var, np.float32(0.0))
-        std = np.sqrt(var) + np.float32(eps)
-        stats[key] = {"mean": mean.astype(np.float32), "std": std.astype(np.float32)}
-    return stats
