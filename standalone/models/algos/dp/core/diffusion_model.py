@@ -177,7 +177,6 @@ class DiffusionModel(nn.Module):
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
         batch_size = nactions.shape[0]
-        horizon = nactions.shape[1]
 
         # handle different ways of passing observation
         trajectory = nactions
@@ -214,15 +213,14 @@ class DiffusionModel(nn.Module):
 
         loss = F.mse_loss(pred, target, reduction='none')
         if self.do_mask_loss_for_padding:
-            if "action_is_pad" in batch:
-                in_episode_bound = ~batch["action_is_pad"].to(device=loss.device)
-            elif "action_mask" in batch and batch["action_mask"] is not None:
-                in_episode_bound = batch["action_mask"].to(device=loss.device) > 0
-            else:
+            if "action_mask" not in batch or batch["action_mask"] is None:
                 raise ValueError(
-                    "do_mask_loss_for_padding=True requires action_is_pad or action_mask in batch"
+                    "do_mask_loss_for_padding=True requires action_mask in batch"
                 )
-            loss = loss * in_episode_bound.unsqueeze(-1)
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss.mean()
+            in_episode_bound = batch["action_mask"].to(device=loss.device) > 0
+            mask = in_episode_bound.unsqueeze(-1).expand_as(loss)
+            loss = loss[mask].mean()
+        else:
+            loss = reduce(loss, 'b ... -> b (...)', 'mean')
+            loss = loss.mean()
         return loss

@@ -153,7 +153,7 @@ class ConditionalUnet1D(nn.Module):
     def forward(self, 
             sample: torch.Tensor, 
             timestep: Union[torch.Tensor, float, int], 
-            global_cond=None, **kwargs):
+            global_cond=None):
         """
         x: (B,T,input_dim)
         timestep: (B,) or int, diffusion step
@@ -181,7 +181,7 @@ class ConditionalUnet1D(nn.Module):
         
         x = sample
         h = []
-        for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
+        for resnet, resnet2, downsample in self.down_modules:
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
             h.append(x)
@@ -190,7 +190,7 @@ class ConditionalUnet1D(nn.Module):
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
 
-        for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
+        for resnet, resnet2, upsample in self.up_modules:
             x = torch.cat((x, h.pop()), dim=1)
             x = resnet(x, global_feature)
             x = resnet2(x, global_feature)
