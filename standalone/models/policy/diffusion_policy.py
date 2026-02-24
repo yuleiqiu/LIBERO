@@ -21,6 +21,7 @@ class DiffusionPolicy(ChunkPolicy):
         encoder_config=None,
         obs_encoder=None,
         dp_config=None,
+        mask_keys=None,
     ):
         super().__init__(predict_horizon=predict_horizon, exec_horizon=exec_horizon)
         self.obs_keys = list(obs_keys) if obs_keys is not None else []
@@ -37,6 +38,7 @@ class DiffusionPolicy(ChunkPolicy):
                 image_keys=self.image_keys,
                 lowdim_keys=self.obs_keys,
                 cfg=encoder_config,
+                mask_keys=mask_keys,
             )
 
         cfg = dict(dp_config or {})

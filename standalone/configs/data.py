@@ -60,6 +60,7 @@ class DataConfig:
     demo_file: str = ""
     obs_keys: str = "gripper_states,joint_states"
     image_keys: str = "agentview_rgb,eye_in_hand_rgb"
+    mask_keys: str = ""
     obs_horizon: int = 1
     predict_horizon: int = 1
     sync_horizons_from_policy: bool = False

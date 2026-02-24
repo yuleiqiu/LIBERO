@@ -73,7 +73,13 @@ def main(cfg: TrainConfig) -> None:
 
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
-    all_keys = obs_keys + image_keys
+    # mask_keys is a list parallel to image_keys; empty string means no mask for that camera
+    _mask_keys_raw = [k.strip() for k in (cfg.data.mask_keys or "").split(",")]
+    while len(_mask_keys_raw) < len(image_keys):
+        _mask_keys_raw.append("")
+    mask_keys = _mask_keys_raw[: len(image_keys)]
+    active_mask_keys = [k for k in mask_keys if k]
+    all_keys = obs_keys + image_keys + active_mask_keys
     policy_name = get_policy_name(cfg)
     split_path = save_dir / "split_indices.json"
 
@@ -227,6 +233,7 @@ def main(cfg: TrainConfig) -> None:
         action_dim,
         proprio_dim=proprio_dim,
         obs_shapes=obs_shapes,
+        mask_keys=mask_keys if active_mask_keys else None,
     )
     if policy_name == "dp":
         if dp_normalizer is None:

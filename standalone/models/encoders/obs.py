@@ -14,6 +14,7 @@ class ObsEncoder(nn.Module):
         image_encoder=None,
         lowdim_encoder=None,
         output_dim=None,
+        image_mask_map=None,
     ):
         super().__init__()
         self.image_keys = list(image_keys or [])
@@ -22,9 +23,8 @@ class ObsEncoder(nn.Module):
         self.lowdim_encoder = lowdim_encoder
         self.output_dim = None
         self.fusion_proj = None
-
-        # TODO: For DP, support per-camera encoders with independent weights
-        # to match the Diffusion Policy paper (currently encoders are shared).
+        # dict mapping image_key -> mask_key for image keys that have a paired mask
+        self.image_mask_map = dict(image_mask_map or {})
 
         image_dim = 0
         if self.image_keys and self.image_encoder is None:
@@ -85,6 +85,24 @@ class ObsEncoder(nn.Module):
             value = value.reshape(value.shape[0], -1)
         return value
 
+    def _get_mask(self, obs, image_key):
+        """Return mask tensor (B, 1, H, W) for the given image key, or None."""
+        mask_key = self.image_mask_map.get(image_key)
+        if not mask_key or mask_key not in obs:
+            return None
+        m = obs[mask_key]
+        if not torch.is_tensor(m):
+            m = torch.as_tensor(m)
+        if m.ndim == 3:  # (B, H, W) -> (B, 1, H, W)
+            m = m.unsqueeze(1)
+        return m
+
+    def _encode_image(self, encoder, x, mask):
+        """Call encoder with mask if it is a DPImageEncoder, otherwise ignore mask."""
+        if mask is not None and isinstance(encoder, DPImageEncoder):
+            return encoder(x, mask=mask)
+        return encoder(x)
+
     def forward(self, obs):
         features = []
         if self.image_keys:
@@ -94,13 +112,15 @@ class ObsEncoder(nn.Module):
                     if key not in obs:
                         raise KeyError(f"missing image key: {key}")
                     x = self._to_image_tensor(obs[key])
-                    image_feats.append(encoder(x))
+                    mask = self._get_mask(obs, key)
+                    image_feats.append(self._encode_image(encoder, x, mask))
             else:
                 for key in self.image_keys:
                     if key not in obs:
                         raise KeyError(f"missing image key: {key}")
                     x = self._to_image_tensor(obs[key])
-                    image_feats.append(self.image_encoder(x))
+                    mask = self._get_mask(obs, key)
+                    image_feats.append(self._encode_image(self.image_encoder, x, mask))
             fused_image = torch.cat(image_feats, dim=-1)
             features.append(fused_image)
 
@@ -133,7 +153,7 @@ def _flatten_shape(shape):
     return total
 
 
-def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None):
+def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None, mask_keys=None):
     if dataclasses.is_dataclass(cfg):
         cfg = dataclasses.asdict(cfg)
     cfg = dict(cfg or {})
@@ -143,6 +163,16 @@ def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None):
 
     image_keys = list(image_keys or [])
     lowdim_keys = list(lowdim_keys or [])
+
+    # Build image -> mask mapping from parallel lists (empty string = no mask)
+    mask_keys = list(mask_keys or [])
+    while len(mask_keys) < len(image_keys):
+        mask_keys.append("")
+    image_mask_map = {
+        img_key: mk
+        for img_key, mk in zip(image_keys, mask_keys)
+        if mk
+    }
 
     image_encoder = None
     if image_keys:
@@ -239,5 +269,6 @@ def build_obs_encoder(obs_shapes, image_keys, lowdim_keys, cfg=None):
         image_encoder=image_encoder,
         lowdim_encoder=lowdim_encoder,
         output_dim=fusion_cfg.get("output_dim"),
+        image_mask_map=image_mask_map if image_mask_map else None,
     )
     return obs_encoder

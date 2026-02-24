@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     import torchvision
@@ -159,6 +160,7 @@ class DPImageEncoder(nn.Module):
         crop_randomizer=None,
         use_group_norm=True,
         spatial_softmax_num_keypoints=32,
+        mask_alpha=0.2,
     ):
         super().__init__()
         if len(input_shape) != 3:
@@ -232,11 +234,19 @@ class DPImageEncoder(nn.Module):
         self.randomizer = None
         if crop_randomizer:
             self.randomizer = CropRandomizer(**crop_randomizer)
+        self.mask_alpha = mask_alpha
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         if self.randomizer is not None:
-            x = self.randomizer.forward_in(x)
+            x, crop_params = self.randomizer.forward_in(x, return_params=True)
+            if mask is not None:
+                mask = self.randomizer.forward_in(
+                    mask, params=crop_params, return_params=False
+                )
         h = self.backbone(x)
+        if mask is not None:
+            mask_low = F.interpolate(mask.float(), size=h.shape[-2:], mode="nearest")
+            h = h * (self.mask_alpha + (1.0 - self.mask_alpha) * mask_low)
         h = torch.flatten(self.pool(h), start_dim=1)
         h = self.relu(self.proj(h))
         if self.randomizer is not None:

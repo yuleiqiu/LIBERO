@@ -11,7 +11,7 @@ def get_policy_name(cfg):
     return str(name).lower()
 
 
-def build_policy(cfg, obs_keys, image_keys, action_dim, proprio_dim=None, obs_shapes=None):
+def build_policy(cfg, obs_keys, image_keys, action_dim, proprio_dim=None, obs_shapes=None, mask_keys=None):
     policy_name = get_policy_name(cfg)
     resolved = resolve_policy_config(cfg)
     if policy_name == "act":
@@ -40,5 +40,6 @@ def build_policy(cfg, obs_keys, image_keys, action_dim, proprio_dim=None, obs_sh
             obs_shapes=obs_shapes,
             encoder_config=resolved.encoder,
             dp_config=resolved.dp_config_dict(),
+            mask_keys=mask_keys,
         )
     raise ValueError(f"unsupported policy: {policy_name}")

@@ -77,23 +77,47 @@ class CropRandomizer(nn.Module):
         # and so the other dimensions retain their shape.
         return list(input_shape)
 
-    def forward_in(self, inputs):
+    def forward_in(self, inputs, return_params=False, params=None):
         """
         Samples N random crops for each input in the batch, and then reshapes
         inputs to [B * N, ...].
+
+        Args:
+            inputs: input tensor of shape [B, C, H, W]
+            return_params (bool): if True, return a (output, crop_indices) tuple.
+                crop_indices has shape [B, N, 2] in training mode, None in eval mode.
+            params: pre-computed crop indices of shape [B, N, 2] to reuse instead of
+                sampling new ones. Useful for applying the same crop to a paired input
+                (e.g. a segmentation mask). Only used in training mode.
         """
         assert len(inputs.shape) >= 3 # must have at least (C, H, W) dimensions
         if self.training:
-            # generate random crops
-            out, _ = sample_random_image_crops(
+            if params is not None:
+                # Reuse provided crop indices for deterministic crop (e.g. mask alignment)
+                out = crop_image_from_indices(
+                    images=inputs,
+                    crop_indices=params,
+                    crop_height=self.crop_height,
+                    crop_width=self.crop_width,
+                )
+                # [B, N, ...] -> [B * N, ...]
+                out = tu.join_dimensions(out, 0, 1)
+                if return_params:
+                    return out, params
+                return out
+            # Sample new random crops
+            out, crop_inds = sample_random_image_crops(
                 images=inputs,
-                crop_height=self.crop_height, 
-                crop_width=self.crop_width, 
+                crop_height=self.crop_height,
+                crop_width=self.crop_width,
                 num_crops=self.num_crops,
                 pos_enc=self.pos_enc,
             )
             # [B, N, ...] -> [B * N, ...]
-            return tu.join_dimensions(out, 0, 1)
+            out = tu.join_dimensions(out, 0, 1)
+            if return_params:
+                return out, crop_inds
+            return out
         else:
             # take center crop during eval
             out = ttf.center_crop(img=inputs, output_size=(
@@ -102,6 +126,8 @@ class CropRandomizer(nn.Module):
                 B,C,H,W = out.shape
                 out = out.unsqueeze(1).expand(B,self.num_crops,C,H,W).reshape(-1,C,H,W)
                 # [B * N, ...]
+            if return_params:
+                return out, None
             return out
 
     def forward_out(self, inputs):
