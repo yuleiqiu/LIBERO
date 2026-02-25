@@ -352,7 +352,7 @@ def load_init_states_with_anchors(
     init_states_path = init_dir / Path(bddl_path).parent.name / f"{Path(bddl_path).stem}.pruned_init"
     if not init_states_path.exists():
         raise FileNotFoundError(f"init states file not found: {init_states_path}")
-    init_states = torch.load(str(init_states_path))
+    init_states = torch.load(str(init_states_path), weights_only=False)
     if torch.is_tensor(init_states):
         init_states = init_states.cpu().numpy()
     else:

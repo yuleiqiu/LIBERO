@@ -259,7 +259,7 @@ def load_init_states(cfg: Any, demo_path: Path) -> np.ndarray:
         init_states_path = Path(init_states_path).expanduser().resolve()
         if not init_states_path.exists():
             raise FileNotFoundError(f"init states file not found: {init_states_path}")
-        init_states = torch.load(str(init_states_path))
+        init_states = torch.load(str(init_states_path), weights_only=False)
         if torch.is_tensor(init_states):
             init_states = init_states.cpu().numpy()
         else:

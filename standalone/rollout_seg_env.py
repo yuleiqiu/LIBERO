@@ -810,7 +810,7 @@ def main(cfg: SegRolloutConfig):
     ckpt_path = Path(cfg.ckpt).expanduser().resolve()
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     run_config = None
     config_path = ckpt_path.parent / TRAIN_CONFIG_NAME
     if config_path.exists():

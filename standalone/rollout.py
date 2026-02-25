@@ -44,7 +44,7 @@ def main(cfg: RolloutConfig):
         predict_horizon=cfg.data.predict_horizon,
     )
 
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     sample = dataset[cfg.sample_index]
     action_dim = sample["actions"].shape[-1]
     print(f"[debug] action_dim: {action_dim}")

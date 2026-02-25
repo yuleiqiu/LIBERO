@@ -377,7 +377,7 @@ def main(cfg: TrainConfig) -> None:
     if cfg.resume:
         if not last_ckpt_path.exists():
             raise FileNotFoundError(f"resume checkpoint not found: {last_ckpt_path}")
-        resume_ckpt = torch.load(last_ckpt_path, map_location="cpu")
+        resume_ckpt = torch.load(last_ckpt_path, map_location="cpu", weights_only=False)
         resume_model_state = (
             resume_ckpt.get("model")
             if isinstance(resume_ckpt, dict) and "model" in resume_ckpt
