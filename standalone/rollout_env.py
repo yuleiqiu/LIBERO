@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from tqdm import tqdm
 
 try:
     import draccus
@@ -26,6 +25,7 @@ from standalone.utils.rollout_utils import (
     infer_camera_size,
     infer_rollout_io_specs,
     load_anchor_indices,
+    read_env_kwargs_from_hdf5,
     load_init_states,
     read_bddl_from_hdf5,
     resolve_bddl_path,
@@ -70,6 +70,13 @@ def run_env_rollouts(
     cam_hw = infer_camera_size(image_shapes) if image_keys else None
 
     env_args = {"bddl_file_name": bddl_path}
+    dataset_env_kwargs = read_env_kwargs_from_hdf5(str(demo_path))
+    if dataset_env_kwargs:
+        env_args.update(dataset_env_kwargs)
+        print(
+            "[info] rollout env kwargs from dataset:",
+            ", ".join(sorted(dataset_env_kwargs.keys())),
+        )
     env_horizon = getattr(cfg, "env_horizon", None)
     if env_horizon is not None:
         env_horizon = int(env_horizon)
@@ -169,7 +176,6 @@ def run_env_rollouts(
             image_norm=cfg.data.image_norm,
         )
         successes = 0
-        pbar = tqdm(total=n_rollouts, desc="rollout", leave=True)
 
         for ep_idx, init_idx in enumerate(rollout_order):
             model.reset()
@@ -214,11 +220,6 @@ def run_env_rollouts(
             print(
                 f"[rollout] episode {ep_idx} | init_state {init_idx} | steps {steps_taken} | success {done}"
             )
-            pbar.update(1)
-            pbar.set_postfix(
-                sr=f"{successes / max(ep_idx + 1, 1):.3f}",
-                step=steps_taken,
-            )
             result = {
                 "rollout_idx": ep_idx,
                 "init_idx": init_idx,
@@ -230,7 +231,6 @@ def run_env_rollouts(
             episode_results.append(result)
 
         env.close()
-        pbar.close()
         if video_writer:
             video_writer.save()
         sr = successes / max(n_rollouts, 1)
@@ -267,7 +267,6 @@ def run_env_rollouts(
 
     successes = 0
     episodes_done = 0
-    pbar = tqdm(total=n_rollouts, desc="rollout", leave=True)
     for loop_idx in range(rollout_loop_num):
         if episodes_done >= n_rollouts:
             break
@@ -315,10 +314,8 @@ def run_env_rollouts(
             dones[k] = True
 
         steps_taken = 0
-        device = next(model.parameters()).device
         while steps_taken < max_steps:
             steps_taken += 1
-            prev_done = sum(1 for d in dones[:remaining] if d)
             pending = [
                 i
                 for i in range(remaining)
@@ -327,7 +324,6 @@ def run_env_rollouts(
             if pending:
                 obs_list = [histories[i].stack() for i in pending]
                 obs_batch = stack_obs_batch(obs_list, obs_keys, image_keys)
-                obs_batch = model._prepare_obs(obs_batch, device, batched=True)
                 model.eval()
                 with torch.no_grad():
                     pred = model.forward(obs_batch)
@@ -359,17 +355,6 @@ def run_env_rollouts(
                 # TODO: consider requiring success to hold for N consecutive steps
                 if bool(done_array[i]):
                     dones[i] = True
-            curr_done = sum(1 for d in dones[:remaining] if d)
-            newly_done = curr_done - prev_done
-            if newly_done > 0:
-                pbar.update(newly_done)
-            current_successes = successes + sum(1 for d in dones[:remaining] if d)
-            total_done = episodes_done + curr_done
-            pbar.set_postfix(
-                sr=f"{current_successes / max(total_done, 1):.3f}",
-                active=remaining - curr_done,
-                step=steps_taken,
-            )
 
             env_obs_list = split_env_obs(env_obs, env_num)
             if video_writer:
@@ -390,10 +375,6 @@ def run_env_rollouts(
 
             if all(dones[:remaining]) and (not video_writer or not any(record_active[:remaining])):
                 break
-
-        incomplete = remaining - sum(1 for d in dones[:remaining] if d)
-        if incomplete > 0:
-            pbar.update(incomplete)
 
         successes += sum(1 for d in dones[:remaining] if d)
         episodes_done += remaining
@@ -417,7 +398,6 @@ def run_env_rollouts(
             episode_results.append(result)
 
     env.close()
-    pbar.close()
     if video_writer:
         video_writer.save()
     sr = successes / max(n_rollouts, 1)

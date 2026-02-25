@@ -75,7 +75,7 @@ Train config fields (grouped):
 - `data.image_norm`: image normalization (`none`, `scale_0_1`, or `imagenet`).
 - `data.image_transforms.*`: optional image augmentation settings.
 - `data.obs_key_mapping`: optional remap for dataset keys.
-- `data.train_ratio`, `data.val_ratio`, `data.seed`: split ratios and RNG seed.
+- `data.val_ratio`, `data.seed`: split ratio and RNG seed (`train_ratio` is derived as `1 - val_ratio`).
 - `policy.name`: policy type (`act` or `dp`).
 - `policy.act.model.*`: ACT model overrides (e.g., `policy.act.model.enc_layers`).
 - `policy.act.kl_weight`, `policy.act.lr_backbone`: ACT wrapper settings.
@@ -115,7 +115,7 @@ Each run directory stores:
 - `train_config.json`: full resolved config snapshot
 - `command.txt`: the exact CLI used to launch the run
 - `run_meta.json`: metadata like `started_at`
-- `split_indices.json`: train/val split indices
+- `split_indices.json`: episode-level train/val split metadata (`train_episodes`/`val_episodes`)
 - `model_last.pt`: latest checkpoint (always saved when save logic triggers)
 - `model_topk_epoch_###.pt`: top-K checkpoints by success rate (saved when enabled)
 - `rollout_videos/`: only when rollouts are enabled (training uses `val/epoch_###`,
@@ -129,12 +129,12 @@ Each run directory stores:
   will enable `policy.dp.model.do_mask_loss_for_padding` automatically if needed,
   and action normalization ignores masked padding.
 - Validation loss is logged every `training.val_every` epochs; only the loss is tracked
-  (no best-val selection or extra val stats). `split_indices.json` still records the
-  train/val split from `data.train_ratio`/`data.val_ratio`.
+  (no best-val selection or extra val stats). `split_indices.json` records the
+  episode-level split from `data.val_ratio` (with `train_ratio = 1 - val_ratio`) and is reused on resume.
 - `rollout.init_states_dir` defaults to the LIBERO init_states path if unset.
 - `rollout.env_horizon` defaults to 2000 for training-time rollouts.
 - `training.save_ckpt_every` gates save logic: only epochs where `epoch % save_ckpt_every == 0` trigger saves.
-- When save logic triggers, `model_last.pt` is always updated.
+- When save logic triggers, `model_last.pt` is always updated (includes model, epoch, optimizer, scheduler, and RNG state for resume).
 - Top-K saving uses `success_rate` from rollouts and only runs on save-trigger epochs.
   It keeps `training.save_topk` checkpoints (default 5) and writes `topk.json` with
   `epoch`, `success_rate`, and `path`.
@@ -143,8 +143,9 @@ Each run directory stores:
 - YAML configs are disabled; use CLI overrides and `train_config.json` instead.
 - Policy configs are dataclass-backed; set `policy.name` and override
   `policy.act.model.*` / `policy.dp.*` as needed.
-- `resume: true` loads `train_config.json` from `paths.save_dir` (or `saved_config_path`),
-  and `saved_config_path` alone can be used to reproduce a run; both paths only allow
+- `resume: true` loads `train_config.json` from `paths.save_dir` (or `saved_config_path`) and
+  resumes from `model_last.pt` when available (continues from saved `epoch` and restores optimizer/scheduler/RNG).
+  `saved_config_path` alone can still be used to reproduce a run; both paths only allow
   overrides in the whitelist (device and wandb fields). If `train_config.json`
   is missing, it falls back to the legacy `config.json`.
 

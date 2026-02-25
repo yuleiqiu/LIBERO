@@ -36,11 +36,13 @@ flowchart LR
 ## 3. Key Parameters
 
 ### 3.1 Data
+
 - `data.obs_horizon`: observation window length
 - `data.predict_horizon`: action chunk length
 - `data.image_norm`: recommend `scale_0_1` for DP encoder inputs
 
 ### 3.2 DP Encoder (dp_resnet)
+
 - `policy.dp.encoder.image.type=dp_resnet`
 - `policy.dp.encoder.image.pretrained=false`
 - `policy.dp.encoder.image.use_group_norm=true`
@@ -51,6 +53,7 @@ flowchart LR
   - training uses random crop; eval uses center crop
 
 ### 3.3 DP Model
+
 - `policy.dp.model.horizon`
 - `policy.dp.model.n_obs_steps`
 - `policy.dp.model.n_action_steps`
@@ -61,12 +64,14 @@ flowchart LR
 - `policy.dp.model.do_mask_loss_for_padding=true/false`
 
 ### 3.4 LR Scheduler (optional)
+
 - `policy.dp.scheduler.name` (`none` | `cosine` | `linear` | `constant`)
 - `policy.dp.scheduler.warmup_steps`
 - `policy.dp.scheduler.num_training_steps` (optional override)
 - `policy.dp.scheduler.min_lr` (optional)
 
 ### 3.5 Noise Scheduler
+
 - `policy.dp.model.noise_scheduler_type=DDPM|DDIM`
 - `policy.dp.model.num_train_timesteps`
 - `policy.dp.model.beta_schedule`
@@ -78,6 +83,7 @@ flowchart LR
 - `policy.dp.model.num_inference_steps` (optional)
 
 ### 3.6 Normalizer (DP only)
+
 - `policy.dp.normalizer.enable`
 - `policy.dp.normalizer.normalize_obs`
 - `policy.dp.normalizer.normalize_actions`
@@ -122,7 +128,7 @@ Your intended interpretation is correct, and the DP logic is consistent with it:
 
 The default mapping in this codebase is:
 
-```
+```bash
 policy.dp.model.n_obs_steps = data.obs_horizon
 policy.dp.model.n_action_steps = data.predict_horizon
 policy.dp.model.horizon = data.obs_horizon + data.predict_horizon - 1
@@ -130,8 +136,20 @@ policy.dp.model.horizon = data.obs_horizon + data.predict_horizon - 1
 
 This ensures the DP constraint holds:
 
-```
+```bash
 n_action_steps <= horizon - n_obs_steps + 1
 ```
 
 In words: the model generates a longer trajectory internally (`horizon`), then takes a chunk (`n_action_steps`) to output, and only the first `exec_horizon` steps are executed.
+
+Example:
+
+```bash
+--data.obs_horizon=2 \
+--data.predict_horizon=256 \
+--policy.dp.model.horizon=256 \
+--policy.dp.model.n_obs_steps=2 \
+--policy.dp.model.n_action_steps=128 \
+```
+
+2步obs -> 预测/训练256步轨迹 -> 训练loss按mask算整段256 -> rollout每次取并执行128步。

@@ -96,11 +96,64 @@ class DiffusionPolicy(ChunkPolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.diffusion_model.set_normalizer(normalizer)
 
+    def _infer_obs_batched(self, obs):
+        """
+        Infer whether the input obs is batched or not 
+        based on the ranks of the tensors and the expected obs shapes.
+
+        If all tensors have rank equal to the expected shape, return False (not batched).
+
+        If all tensors have rank equal to the expected shape + 1, return True (batched).
+
+        If there is a mix of ranks, raise an error.
+
+        If obs is empty or none of the keys have expected shapes, default to True (batched).
+        """
+        inferred = None
+        for key in self.obs_keys + self.image_keys:
+            if key not in obs:
+                continue
+            value = obs[key]
+            ndim = value.ndim if torch.is_tensor(value) else torch.as_tensor(value).ndim
+            expected_shape = self.obs_shapes.get(key)
+            if expected_shape is None:
+                continue
+            expected_ndim = len(expected_shape)
+            if ndim == expected_ndim:
+                current = False
+            elif ndim == expected_ndim + 1:
+                current = True
+            else:
+                raise ValueError(
+                    f"unexpected obs rank for {key}: got {ndim}, "
+                    f"expected {expected_ndim} or {expected_ndim + 1}"
+                )
+            if inferred is None:
+                inferred = current
+            elif inferred != current:
+                raise ValueError("inconsistent batched/unbatched obs ranks across keys")
+        return True if inferred is None else inferred
+
+    def get_action(self, obs, batched=False):
+        if len(self._action_queue) == 0:
+            self.eval()
+            with torch.no_grad():
+                # Let forward be the single entry point for obs preprocessing.
+                pred = self.forward(obs)
+                if pred.ndim == 2:
+                    pred = pred.view(pred.shape[0], self.predict_horizon, -1)
+            if pred.shape[0] != 1:
+                raise ValueError("get_action expects a single observation (batch size 1)")
+            actions = pred[0].detach()
+            take = min(self.exec_horizon, actions.shape[0])
+            self._action_queue.extend(actions[:take])
+        return self._action_queue.popleft()
+
     def forward(self, obs):
         if not isinstance(obs, dict):
             raise TypeError("DiffusionPolicy expects a dict of observations")
         device = next(self.parameters()).device
-        obs = self._prepare_obs(obs, device, batched=True)
+        obs = self._prepare_obs(obs, device, batched=self._infer_obs_batched(obs))
         result = self.diffusion_model.predict_action(obs)
         actions = result["action"]
         if actions.ndim == 2:

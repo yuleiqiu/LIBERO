@@ -2,7 +2,6 @@ from typing import Dict, Iterable
 
 import numpy as np
 import torch
-from tqdm import tqdm
 
 from standalone.models.algos.dp.utils.normalizer import (
     LinearNormalizer,
@@ -56,7 +55,7 @@ def compute_linear_stats(
         dataset.set_image_transforms_enabled(False)
 
     try:
-        for idx in tqdm(indices, desc="compute normalizer stats", leave=True):
+        for idx in indices:
             sample = dataset[idx]
             obs = sample["obs"]
             for key in obs_keys:

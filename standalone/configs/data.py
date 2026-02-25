@@ -67,6 +67,5 @@ class DataConfig:
     image_norm: str = "none"
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
     obs_key_mapping: Optional[Dict[str, str]] = None
-    train_ratio: float = 0.9
-    val_ratio: float = 0.1
+    val_ratio: float = 0.02
     seed: int = 10000

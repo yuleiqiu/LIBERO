@@ -1,13 +1,14 @@
 import json
+import random
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler, Subset
-from tqdm import tqdm
+from torch.utils.data import DataLoader, RandomSampler
 
 try:
     import draccus
@@ -26,7 +27,7 @@ from standalone.utils.train_utils import (
     build_scheduler,
     build_optimizer,
     load_init_states_with_anchors,
-    make_split_indices,
+    make_episode_split_keys,
     prepare_train_config,
     sample_per_anchor,
 )
@@ -34,9 +35,48 @@ from standalone.utils.train_utils import (
 
 def set_seed(seed: int) -> None:
     """Set random seeds for numpy and torch."""
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def _capture_rng_state() -> dict:
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: dict) -> None:
+    if not isinstance(state, dict):
+        return
+    py_state = state.get("python")
+    if py_state is not None:
+        random.setstate(py_state)
+    np_state = state.get("numpy")
+    if np_state is not None:
+        np.random.set_state(np_state)
+    torch_state = state.get("torch")
+    if torch_state is not None:
+        torch.set_rng_state(torch_state)
+    if torch.cuda.is_available():
+        cuda_states = state.get("torch_cuda")
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
+
+
+def _move_optimizer_state_to_device(
+    optimizer: torch.optim.Optimizer, device: torch.device
+) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device=device)
 
 
 @draccus.wrap()
@@ -45,6 +85,7 @@ def main(cfg: TrainConfig) -> None:
     set_seed(cfg.data.seed)
 
     wandb = None
+    wandb_run_id_path = save_dir / "wandb_run_id.txt"
     if cfg.logging.use_wandb:
         try:
             import wandb as wandb_lib
@@ -59,11 +100,22 @@ def main(cfg: TrainConfig) -> None:
             wandb_config = getattr(cfg, "__dict__", cfg)
         if isinstance(wandb_config, dict):
             wandb_config["policy"] = serialize_policy_config(cfg)
-        wandb.init(
+        wandb_init_kwargs = dict(
             project=cfg.logging.wandb_project,
             entity=cfg.logging.wandb_entity or None,
             config=wandb_config,
         )
+        if cfg.resume and wandb_run_id_path.exists():
+            with open(wandb_run_id_path, "r") as f:
+                run_id = f.read().strip()
+            if run_id:
+                wandb_init_kwargs["id"] = run_id
+                wandb_init_kwargs["resume"] = "must"
+                print(f"[info] resuming wandb run id={run_id}")
+        wandb.init(**wandb_init_kwargs)
+        if wandb.run is not None:
+            with open(wandb_run_id_path, "w") as f:
+                f.write(str(wandb.run.id) + "\n")
         if cfg.logging.experiment_name:
             wandb.run.name = cfg.logging.experiment_name
 
@@ -129,7 +181,59 @@ def main(cfg: TrainConfig) -> None:
                 )
                 dp_cfg.model.do_mask_loss_for_padding = True
 
-    base_dataset = HDF5SequenceDataset(
+    with h5py.File(str(demo_path), "r") as f:
+        all_demo_keys = sorted(str(k) for k in f["data"].keys())
+    if not all_demo_keys:
+        raise ValueError(f"no demos found in {demo_path}")
+
+    val_ratio = float(cfg.data.val_ratio)
+    if val_ratio < 0 or val_ratio >= 1.0:
+        raise ValueError("data.val_ratio must be in [0, 1)")
+    train_ratio = 1.0 - val_ratio
+
+    split_data = None
+    if split_path.exists():
+        with open(split_path, "r") as f:
+            split_data = json.load(f)
+        if split_data.get("split_unit") != "episode":
+            raise ValueError(
+                f"existing split file is not episode-based: {split_path}. "
+                "Delete it or use a fresh run directory."
+            )
+        train_episodes = [str(k) for k in split_data.get("train_episodes", [])]
+        val_episodes = [str(k) for k in split_data.get("val_episodes", [])]
+        print(f"[info] loaded episode split from {split_path}")
+    else:
+        train_episodes, val_episodes = make_episode_split_keys(
+            all_demo_keys, val_ratio, cfg.data.seed
+        )
+
+    train_set = set(train_episodes)
+    val_set = set(val_episodes)
+    if len(train_set) != len(train_episodes):
+        raise ValueError("duplicate episodes found in train split")
+    if len(val_set) != len(val_episodes):
+        raise ValueError("duplicate episodes found in val split")
+    overlap = train_set.intersection(val_set)
+    if overlap:
+        raise ValueError(f"episode leakage detected in split: {sorted(overlap)}")
+    all_demo_set = set(all_demo_keys)
+    split_union = train_set.union(val_set)
+    missing = sorted(split_union - all_demo_set)
+    if missing:
+        raise ValueError(f"split contains episodes not in dataset: {missing[:5]}")
+    uncovered = sorted(all_demo_set - split_union)
+    if uncovered:
+        raise ValueError(
+            "split does not cover all episodes. "
+            f"Found {len(uncovered)} uncovered episode(s)."
+        )
+    if len(train_episodes) == 0:
+        raise ValueError("train split is empty")
+    if val_ratio > 0 and len(val_episodes) == 0:
+        raise ValueError("val_ratio > 0 but val split is empty")
+
+    dataset_kwargs = dict(
         hdf5_path=str(demo_path),
         obs_keys=all_keys,
         obs_horizon=cfg.data.obs_horizon,
@@ -140,40 +244,64 @@ def main(cfg: TrainConfig) -> None:
         image_norm=cfg.data.image_norm,
         image_transforms=cfg.data.image_transforms,
     )
-
-    train_idx, val_idx = make_split_indices(
-        len(base_dataset), cfg.data.train_ratio, cfg.data.val_ratio, cfg.data.seed
+    train_dataset = HDF5SequenceDataset(demos=train_episodes, **dataset_kwargs)
+    val_dataset = (
+        HDF5SequenceDataset(demos=val_episodes, **dataset_kwargs)
+        if len(val_episodes) > 0
+        else None
     )
+    train_sample_count = len(train_dataset)
+    val_sample_count = len(val_dataset) if val_dataset is not None else 0
+    if train_sample_count == 0:
+        raise ValueError("train split has no samples")
+
+    split_data = {
+        "split_unit": "episode",
+        "seed": int(cfg.data.seed),
+        "train_ratio": float(train_ratio),
+        "val_ratio": float(val_ratio),
+        "num_episodes_total": len(all_demo_keys),
+        "num_episodes_train": len(train_episodes),
+        "num_episodes_val": len(val_episodes),
+        "num_samples_train": train_sample_count,
+        "num_samples_val": val_sample_count,
+        "train_episodes": train_episodes,
+        "val_episodes": val_episodes,
+    }
     with open(split_path, "w") as f:
-        json.dump({"train": train_idx, "val": val_idx}, f, indent=2)
+        json.dump(split_data, f, indent=2)
+    print(
+        "[info] split | "
+        f"train episodes {len(train_episodes)} ({train_sample_count} samples), "
+        f"val episodes {len(val_episodes)} ({val_sample_count} samples)"
+    )
     if wandb is not None:
         wandb.run.summary.update(
             {
-                "split/train_size": len(train_idx),
-                "split/val_size": len(val_idx),
+                "split/train_episodes": len(train_episodes),
+                "split/val_episodes": len(val_episodes),
+                "split/train_samples": train_sample_count,
+                "split/val_samples": val_sample_count,
             }
         )
-
-    train_dataset = Subset(base_dataset, train_idx)
-    val_dataset = Subset(base_dataset, val_idx)
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=cfg.training.batch_size,
         sampler=RandomSampler(train_dataset),
-        num_workers=0,
+        num_workers=8,
         pin_memory=torch.cuda.is_available(),
     )
     val_loader = None
-    if len(val_dataset) > 0:
+    if val_dataset is not None and len(val_dataset) > 0:
         val_loader = DataLoader(
             val_dataset,
             batch_size=cfg.training.batch_size,
             shuffle=False,
-            num_workers=0,
+            num_workers=4,
             pin_memory=torch.cuda.is_available(),
         )
-    sample = base_dataset[train_idx[0]]
+    sample = train_dataset[0]
     action_dim = sample["actions"].shape[-1]
     # print(f"[debug] action_dim: {action_dim}")
     proprio_dim = sum(np.prod(sample["obs"][k].shape[1:]) for k in obs_keys)
@@ -204,8 +332,8 @@ def main(cfg: TrainConfig) -> None:
             stats = {}
             if obs_keys_for_norm or include_actions:
                 stats = compute_linear_stats(
-                    base_dataset,
-                    train_idx,
+                    train_dataset,
+                    range(len(train_dataset)),
                     obs_keys_for_norm,
                     image_keys=image_keys,
                     last_n_dims=normalizer_cfg.last_n_dims,
@@ -243,6 +371,57 @@ def main(cfg: TrainConfig) -> None:
     optimizer = build_optimizer(cfg, model, policy_name)
     total_steps = int(cfg.training.epochs) * max(len(train_loader), 1)
     scheduler = build_scheduler(cfg, optimizer, policy_name, total_steps)
+
+    last_ckpt_path = save_dir / "model_last.pt"
+    start_epoch = 0
+    if cfg.resume:
+        if not last_ckpt_path.exists():
+            raise FileNotFoundError(f"resume checkpoint not found: {last_ckpt_path}")
+        resume_ckpt = torch.load(last_ckpt_path, map_location="cpu")
+        resume_model_state = (
+            resume_ckpt.get("model")
+            if isinstance(resume_ckpt, dict) and "model" in resume_ckpt
+            else resume_ckpt
+        )
+        model.load_state_dict(resume_model_state)
+
+        loaded_optimizer = False
+        loaded_scheduler = False
+        loaded_normalizer = False
+        if isinstance(resume_ckpt, dict):
+            if policy_name == "dp" and dp_normalizer is not None:
+                normalizer_state = resume_ckpt.get("normalizer")
+                if normalizer_state is not None:
+                    dp_normalizer.load_state_dict(normalizer_state)
+                    model.set_normalizer(dp_normalizer)
+                    loaded_normalizer = True
+            opt_state = resume_ckpt.get("optimizer")
+            if opt_state is not None:
+                optimizer.load_state_dict(opt_state)
+                _move_optimizer_state_to_device(optimizer, torch.device(device))
+                loaded_optimizer = True
+            sched_state = resume_ckpt.get("scheduler")
+            if scheduler is not None and sched_state is not None:
+                scheduler.load_state_dict(sched_state)
+                loaded_scheduler = True
+            start_epoch = int(resume_ckpt.get("epoch", 0) or 0)
+            _restore_rng_state(resume_ckpt.get("rng_state"))
+        print(
+            "[info] resumed training state: "
+            f"epoch={start_epoch}, optimizer={'yes' if loaded_optimizer else 'no'}, "
+            f"scheduler={'yes' if loaded_scheduler else 'no'}, "
+            f"normalizer={'yes' if loaded_normalizer else 'no'}"
+        )
+
+    if start_epoch >= int(cfg.training.epochs):
+        print(
+            f"[info] checkpoint epoch {start_epoch} >= training.epochs {cfg.training.epochs}; nothing to do."
+        )
+        if wandb is not None:
+            wandb.run.summary["ckpt_path"] = str(last_ckpt_path)
+            wandb.finish()
+        return
+
     def _model_state_for_ckpt():
         state = model.state_dict()
         if policy_name == "dp":
@@ -281,7 +460,6 @@ def main(cfg: TrainConfig) -> None:
     else:
         rollout_runner = None
 
-    last_ckpt_path = save_dir / "model_last.pt"
     final_ckpt_path = None
     printed_batch = False
     topk_path = save_dir / "topk.json"
@@ -295,12 +473,12 @@ def main(cfg: TrainConfig) -> None:
                 topk_records = data
         except Exception:
             topk_records = []
-    for epoch in range(1, cfg.training.epochs + 1):
+    for epoch in range(start_epoch + 1, cfg.training.epochs + 1):
         model.train()
         train_losses = []
         train_stats = {}
         train_stat_count = 0
-        for batch in tqdm(train_loader, desc=f"train epoch {epoch}"):
+        for batch in train_loader:
             if not printed_batch:
                 obs_horizon = next(iter(batch["obs"].values())).shape[1]
                 predict_horizon = batch["actions"].shape[1]
@@ -412,18 +590,45 @@ def main(cfg: TrainConfig) -> None:
                     anchor_counts[anchor_id] += 1
                     if result.get("success"):
                         anchor_success[anchor_id] += 1
-                anchor_table = wandb.Table(columns=["anchor_id", "success"])
+                anchor_rows = []
                 for anchor_id in sorted(anchor_counts.keys()):
-                    success_str = f"{anchor_success[anchor_id]}/{anchor_counts[anchor_id]}"
-                    anchor_table.add_data(anchor_id, success_str)
+                    success_count = int(anchor_success[anchor_id])
+                    total_count = int(anchor_counts[anchor_id])
+                    raw_rate_str = f"{success_count}/{total_count}"
+                    success_rate = success_count / total_count if total_count > 0 else 0.0
+                    # Keep anchor_id as string to avoid UI-side numeric formatting quirks.
+                    anchor_rows.append(
+                        [
+                            str(anchor_id),
+                            raw_rate_str,
+                            success_count,
+                            total_count,
+                            success_rate,
+                        ]
+                    )
 
-                wandb.log(
-                    {
-                        "rollout/success_rate": rollout_details.get("success_rate"),
-                        "rollout/anchor_success": anchor_table,
-                    },
-                    step=epoch,
+                anchor_table = wandb.Table(
+                    data=anchor_rows,
+                    columns=[
+                        "anchor_id",
+                        "raw_rate_str",
+                        "success_count",
+                        "total_count",
+                        "success_rate",
+                    ],
                 )
+                log_payload = {
+                    "rollout/success_rate": rollout_details.get("success_rate"),
+                    "rollout/anchor_stats_table": anchor_table,
+                }
+                if anchor_rows:
+                    log_payload["rollout/success_rate_chart"] = wandb.plot.bar(
+                        anchor_table,
+                        label="anchor_id",
+                        value="success_rate",
+                        title="Success Rate per Anchor ID",
+                    )
+                wandb.log(log_payload, step=epoch)
 
         if wandb is not None:
             log_data = {"epoch": epoch, "train/loss": avg_train}
@@ -434,8 +639,17 @@ def main(cfg: TrainConfig) -> None:
             wandb.log(log_data, step=epoch)
 
         if should_save:
+            ckpt_payload = {
+                "model": _model_state_for_ckpt(),
+                "epoch": int(epoch),
+                "optimizer": optimizer.state_dict(),
+                "rng_state": _capture_rng_state(),
+                **ckpt_extra,
+            }
+            if scheduler is not None:
+                ckpt_payload["scheduler"] = scheduler.state_dict()
             torch.save(
-                {"model": _model_state_for_ckpt(), **ckpt_extra},
+                ckpt_payload,
                 last_ckpt_path,
             )
             final_ckpt_path = last_ckpt_path

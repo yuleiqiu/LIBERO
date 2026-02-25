@@ -255,6 +255,50 @@ def make_split_indices(
     return train_idx, val_idx
 
 
+def make_episode_split_keys(
+    demo_keys: Sequence[str], val_ratio: float, seed: int
+) -> Tuple[List[str], List[str]]:
+    """Create train/val episode splits with a fixed seed.
+
+    Split semantics:
+    - val_ratio is applied over episode count.
+    - train_ratio is derived as (1 - val_ratio), with any flooring remainder in train.
+    - When val_ratio > 0, val must contain at least one episode.
+    """
+    if val_ratio < 0 or val_ratio >= 1.0:
+        raise ValueError("val_ratio must be in [0, 1)")
+
+    episodes = sorted(str(key) for key in demo_keys)
+    num_episodes = len(episodes)
+    if num_episodes == 0:
+        raise ValueError("no episodes found in dataset")
+    if val_ratio > 0 and num_episodes < 2:
+        raise ValueError("val_ratio > 0 requires at least 2 episodes")
+
+    n_val = int(num_episodes * val_ratio)
+    if val_ratio > 0:
+        n_val = max(n_val, 1)
+    n_train = num_episodes - n_val
+
+    if n_val >= num_episodes:
+        n_val = num_episodes - 1
+        n_train = 1
+    if n_train <= 0:
+        raise ValueError("train split is empty; adjust ratios or dataset")
+    if val_ratio > 0 and n_val <= 0:
+        raise ValueError("val split is empty; adjust ratios or dataset")
+
+    g = torch.Generator().manual_seed(seed)
+    shuffled = [episodes[i] for i in torch.randperm(num_episodes, generator=g).tolist()]
+    train_episodes = shuffled[:n_train]
+    val_episodes = shuffled[n_train : n_train + n_val]
+
+    overlap = set(train_episodes).intersection(val_episodes)
+    if overlap:
+        raise RuntimeError(f"episode leakage detected: {sorted(overlap)}")
+    return train_episodes, val_episodes
+
+
 # --- Rollout/init state helpers ---
 def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
     """Read the BDDL file name from an HDF5 dataset."""

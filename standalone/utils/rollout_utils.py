@@ -27,6 +27,29 @@ DEFAULT_OBS_KEY_MAPPING = {
     "ee_pos": "robot0_eef_pos",
 }
 
+ROLLOUT_ENV_KWARGS_ALLOWLIST = (
+    "robots",
+    "controller",
+    "controller_configs",
+    "gripper_types",
+    "initialization_noise",
+    "control_freq",
+    "ignore_done",
+    "reward_shaping",
+    "camera_depths",
+    "camera_segmentations",
+    "renderer",
+    "renderer_config",
+)
+
+
+def _decode_if_bytes(value: Any) -> Any:
+    if isinstance(value, np.ndarray) and value.shape == ():
+        value = value.item()
+    if isinstance(value, (bytes, bytearray, np.bytes_)):
+        return value.decode("utf-8")
+    return value
+
 
 def _ensure_video_camera(
     video_writer: Optional[Any],
@@ -98,6 +121,45 @@ def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
     with h5py.File(hdf5_path, "r") as f:
         data = f["data"]
         return data.attrs.get("bddl_file_name", None)
+
+
+def read_env_kwargs_from_hdf5(hdf5_path: str) -> Dict[str, Any]:
+    """Read rollout-relevant env kwargs (e.g. controller configs) from HDF5 attrs."""
+    with h5py.File(hdf5_path, "r") as f:
+        data = f["data"]
+        raw = data.attrs.get("env_args", None)
+        if raw is None:
+            raw = data.attrs.get("env_info", None)
+    if raw is None:
+        return {}
+
+    raw = _decode_if_bytes(raw)
+    payload: Dict[str, Any]
+    if isinstance(raw, Mapping):
+        payload = dict(raw)
+    elif isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            print("[warning] failed to parse data attrs env_args/env_info; using default env kwargs")
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        payload = parsed
+    else:
+        print(
+            f"[warning] unsupported env_args/env_info type: {type(raw)}; using default env kwargs"
+        )
+        return {}
+
+    env_kwargs = payload.get("env_kwargs", payload)
+    if not isinstance(env_kwargs, dict):
+        return {}
+    return {
+        key: env_kwargs[key]
+        for key in ROLLOUT_ENV_KWARGS_ALLOWLIST
+        if key in env_kwargs
+    }
 
 
 def read_init_states_from_hdf5(hdf5_path: str) -> np.ndarray:
