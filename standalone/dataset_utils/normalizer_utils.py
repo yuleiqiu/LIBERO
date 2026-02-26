@@ -1,3 +1,4 @@
+import math
 from typing import Dict, Iterable
 
 import numpy as np
@@ -48,6 +49,11 @@ def compute_linear_stats(
     image_keys = set(image_keys or [])
     obs_keys = [k for k in obs_keys if k not in image_keys]
     stats = {}
+    total = len(indices) if hasattr(indices, "__len__") else None
+    checkpoints = []
+    checkpoint_ptr = 0
+    if total is not None and total > 0:
+        checkpoints = [math.ceil(total * frac) for frac in (0.25, 0.5, 0.75, 1.0)]
 
     restore_transforms = None
     if hasattr(dataset, "set_image_transforms_enabled"):
@@ -55,7 +61,7 @@ def compute_linear_stats(
         dataset.set_image_transforms_enabled(False)
 
     try:
-        for idx in indices:
+        for processed, idx in enumerate(indices, start=1):
             sample = dataset[idx]
             obs = sample["obs"]
             for key in obs_keys:
@@ -84,6 +90,12 @@ def compute_linear_stats(
                 if "action" not in stats:
                     stats["action"] = _init_stats(flat.shape[1])
                 _update_stats(stats["action"], flat)
+            while checkpoint_ptr < len(checkpoints) and processed >= checkpoints[checkpoint_ptr]:
+                pct = (checkpoint_ptr + 1) * 25
+                print(
+                    f"[info] compute normalizer stats: {pct}% ({processed}/{total})"
+                )
+                checkpoint_ptr += 1
     finally:
         if restore_transforms is not None:
             dataset.set_image_transforms_enabled(restore_transforms)

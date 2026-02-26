@@ -529,7 +529,12 @@ def main(cfg: TrainConfig) -> None:
             else {}
         )
         avg_val = None
-        do_val = val_loader is not None and val_every > 0 and epoch % val_every == 0
+        force_first_epoch_val = (start_epoch == 0 and epoch == 1)
+        do_val = (
+            val_loader is not None
+            and val_every > 0
+            and (force_first_epoch_val or epoch % val_every == 0)
+        )
         if do_val:
             model.eval()
             val_losses = []
