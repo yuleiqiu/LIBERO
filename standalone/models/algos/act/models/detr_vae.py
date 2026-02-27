@@ -116,8 +116,9 @@ class ACTModel(nn.Module):
         """Run the model and return actions, padding logits, and latent stats."""
         is_training = actions is not None  # train or val
         bs, _ = qpos.shape
-        ### Obtain latent z from action sequence
+        
         if is_training:
+            ## Obtain latent z from encoder during trainning.
             # project action sequence to embedding dim, and concat with a CLS token
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
@@ -141,6 +142,7 @@ class ACTModel(nn.Module):
             latent_sample = reparametrize(mu, logvar)
             latent_input = self.latent_out_proj(latent_sample)
         else:
+            ## During inference, z is sampled from standard Gaussian.
             mu = logvar = None
             latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
             latent_input = self.latent_out_proj(latent_sample)
@@ -160,15 +162,11 @@ class ACTModel(nn.Module):
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            # hs = self.transformer(
-            #     src=src,
-            #     mask=None,
-            #     query_embed=self.query_embed.weight,
-            #     pos_embed=pos,
-            #     latent_input=latent_input,
-            #     proprio_input=proprio_input,
-            #     additional_pos_embed=self.additional_pos_embed.weight
-            # )[0]
+
+            # Note: ACT paper says they use the last layer output,
+            # but their code uess the first layer output.
+            # The origion code is: hs = self.transformer(...)[0]
+            # We change it to match the paper.
             hs = self.transformer(
                 src=src,
                 mask=None,
