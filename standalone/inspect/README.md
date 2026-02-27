@@ -41,3 +41,33 @@ python standalone/inspect/check_action_fit.py \
   --demo-file libero/datasets/processed/<task>_demo.hdf5 \
   --config standalone/standalone_runs/run_act_quickcheck/train_config.json
 ```
+
+## inspect_dp_normalizer.py
+Inspect DP normalizer parameters and verify empirical stats before/after normalization.
+Supports loading normalizer from checkpoint or recomputing from config + dataset.
+
+```bash
+python standalone/inspect/inspect_dp_normalizer.py \
+  --ckpt standalone/standalone_runs/train_dp_quickcheck/run_000/model_last.pt \
+  --config standalone/standalone_runs/train_dp_quickcheck/run_000/train_config.json \
+  --focus-keys gripper_states,action
+```
+
+Quick check on a subset:
+```bash
+python standalone/inspect/inspect_dp_normalizer.py \
+  --ckpt standalone/standalone_runs/train_dp_quickcheck/run_000/model_last.pt \
+  --max-samples 2000 \
+  --focus-keys gripper_states,action
+```
+
+Recompute train split with explicit split params (same episode-level logic as training):
+```bash
+python standalone/inspect/inspect_dp_normalizer.py \
+  --config standalone/standalone_runs/train_dp_quickcheck/run_000/train_config.json \
+  --ckpt standalone/standalone_runs/train_dp_quickcheck/run_000/model_last.pt \
+  --split-source recompute \
+  --val-ratio 0.02 \
+  --split-seed 10000 \
+  --focus-keys gripper_states,action
+```
