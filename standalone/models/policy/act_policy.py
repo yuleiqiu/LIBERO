@@ -195,8 +195,9 @@ class ACTPolicy(ChunkPolicy):
     def forward(self, obs):
         if not isinstance(obs, dict):
             raise TypeError("ACTPolicy expects a dict of observations")
-        qpos = self._build_qpos(obs).to(dtype=torch.float32)
-        image = self._build_images(obs)
+        device = next(self.parameters()).device
+        qpos = self._build_qpos(obs).to(device=device, dtype=torch.float32)
+        image = self._build_images(obs).to(device=device, dtype=torch.float32)
         actions, _, _ = self.model(qpos, image, env_state=None)
         if actions.ndim == 2:
             actions = actions.unsqueeze(1)
