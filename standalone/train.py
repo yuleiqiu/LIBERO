@@ -1,6 +1,5 @@
 import json
 import random
-from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -586,54 +585,10 @@ def main(cfg: TrainConfig) -> None:
             if rollout_details is not None:
                 rollout_success = rollout_details.get("success_rate")
             if wandb is not None and rollout_details is not None:
-                anchor_counts = defaultdict(int)
-                anchor_success = defaultdict(int)
-                for result in rollout_details.get("episode_results", []):
-                    anchor_id = result.get("anchor_id")
-                    if anchor_id is None:
-                        continue
-                    anchor_counts[anchor_id] += 1
-                    if result.get("success"):
-                        anchor_success[anchor_id] += 1
-                anchor_rows = []
-                for anchor_id in sorted(anchor_counts.keys()):
-                    success_count = int(anchor_success[anchor_id])
-                    total_count = int(anchor_counts[anchor_id])
-                    raw_rate_str = f"{success_count}/{total_count}"
-                    success_rate = success_count / total_count if total_count > 0 else 0.0
-                    # Keep anchor_id as string to avoid UI-side numeric formatting quirks.
-                    anchor_rows.append(
-                        [
-                            str(anchor_id),
-                            raw_rate_str,
-                            success_count,
-                            total_count,
-                            success_rate,
-                        ]
-                    )
-
-                anchor_table = wandb.Table(
-                    data=anchor_rows,
-                    columns=[
-                        "anchor_id",
-                        "raw_rate_str",
-                        "success_count",
-                        "total_count",
-                        "success_rate",
-                    ],
+                wandb.log(
+                    {"rollout/success_rate": rollout_details.get("success_rate")},
+                    step=epoch,
                 )
-                log_payload = {
-                    "rollout/success_rate": rollout_details.get("success_rate"),
-                    "rollout/anchor_stats_table": anchor_table,
-                }
-                if anchor_rows:
-                    log_payload["rollout/success_rate_chart"] = wandb.plot.bar(
-                        anchor_table,
-                        label="anchor_id",
-                        value="success_rate",
-                        title="Success Rate per Anchor ID",
-                    )
-                wandb.log(log_payload, step=epoch)
 
         if wandb is not None:
             log_data = {"epoch": epoch, "train/loss": avg_train}
