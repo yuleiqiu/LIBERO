@@ -139,6 +139,21 @@ class MokaPot(TurbosquidObjects):
 
 
 @register_object
+class MokaPotRandomYaw(TurbosquidObjects):
+    def __init__(
+        self,
+        name="moka_pot_random_yaw",
+        obj_name="moka_pot",
+        joints=[dict(type="free", damping="0.0005")],
+    ):
+        super().__init__(name, obj_name, joints)
+        # Libero100TableRegionSampler's single-axis quat encoding behaves like
+        # tabletop yaw when using the "x" branch on upright Turbosquid objects.
+        self.rotation = (0.0, 2 * np.pi)
+        self.rotation_axis = "x"
+
+
+@register_object
 class BlackBook(TurbosquidObjects):
     def __init__(
         self,
