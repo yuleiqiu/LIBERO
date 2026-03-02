@@ -16,7 +16,6 @@ from libero.libero.envs import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo-file", default="demo.hdf5")
-    parser.add_argument("--use-actions", action="store_true") # Not used in this script, but kept for compatibility
     parser.add_argument("--use-camera-obs", action="store_true")
     parser.add_argument("--no-proprio", action="store_true")
     parser.add_argument("--use-depth", action="store_true")
