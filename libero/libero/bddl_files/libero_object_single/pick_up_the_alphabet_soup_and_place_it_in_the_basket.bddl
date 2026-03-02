@@ -13,23 +13,17 @@
           (:target floor)
           (:ranges (
               ; discrete point 1
-              (-0.36 -0.36 -0.34 -0.34)
+              (-0.165 -0.345 -0.095 -0.275)
               ; discrete point 2
-              (-0.16 -0.36 -0.14 -0.34)
+              (0.015 -0.345 0.085 -0.275)
               ; discrete point 3
-              (0.04 -0.36 0.06 -0.34)
+              (-0.165 -0.165 -0.095 -0.095)
               ; discrete point 4
-              (-0.36 -0.16 -0.34 -0.14)
+              (0.015 -0.165 0.085 -0.095)
               ; discrete point 5
-              (-0.16 -0.16 -0.14 -0.14)
+              (-0.165 0.015 -0.095 0.085)
               ; discrete point 6
-              (0.04 -0.16 0.06 -0.14)
-              ; discrete point 7
-              (-0.36 0.04 -0.34 0.06)
-              ; discrete point 8
-              (-0.16 0.04 -0.14 0.06)
-              ; discrete point 9
-              (0.04 0.04 0.06 0.06)
+              (0.015 0.015 0.085 0.085)
             )
           )
       )
@@ -40,10 +34,10 @@
 
   (:fixtures
     floor - floor
+    basket_1 - basket
   )
 
   (:objects
-    basket_1 - basket
     alphabet_soup_1 - alphabet_soup
   )
 

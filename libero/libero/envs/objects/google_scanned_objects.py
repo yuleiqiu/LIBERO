@@ -68,8 +68,10 @@ class Plate(GoogleScannedObject):
 
 @register_object
 class Basket(GoogleScannedObject):
-    def __init__(self, name="basket", obj_name="basket"):
-        super().__init__(name, obj_name)
+    # Originally no "joints" argument,
+    # but added to make it work for my experiment
+    def __init__(self, name="basket", obj_name="basket", joints=[dict(type="free", damping="0.0005")]):
+        super().__init__(name, obj_name, joints=joints)
 
 
 @register_object
