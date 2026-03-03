@@ -64,6 +64,20 @@ class ACTTemporalEnsembler:
 
 
 class ACTPolicy(ChunkPolicy):
+    """ACT wrapper used by standalone training and rollout.
+
+    This wrapper is intentionally thin:
+
+    - It converts the dataset/rollout observation dict into ACT's expected
+      `(qpos, images)` tensors.
+    - It keeps rollout-facing chunk policy semantics (`get_action`, optional
+      temporal ensembling).
+    - It delegates the actual VAE/transformer model to `ACTModel`.
+
+    Note: unlike Diffusion Policy, this ACT wrapper currently consumes only the
+    latest frame from the observation history when `obs_horizon > 1`.
+    """
+
     def __init__(
         self,
         obs_keys,
@@ -128,6 +142,7 @@ class ACTPolicy(ChunkPolicy):
         return value if torch.is_tensor(value) else torch.as_tensor(value)
 
     def _select_last_step(self, value):
+        """Collapse an observation history to the latest step for ACT."""
         if value.ndim >= 3 and value.shape[1] == self.obs_horizon:
             return value[:, -1]
         if self.obs_horizon > 1 and value.ndim >= 2 and value.shape[0] == self.obs_horizon:
@@ -135,6 +150,7 @@ class ACTPolicy(ChunkPolicy):
         return value
 
     def _build_qpos(self, obs):
+        """Concatenate low-dimensional observation keys into ACT proprio input."""
         parts = []
         for key in self.obs_keys:
             if key not in obs:
@@ -154,6 +170,7 @@ class ACTPolicy(ChunkPolicy):
         return qpos
 
     def _build_images(self, obs):
+        """Stack camera observations into ACT's `(B, num_cams, C, H, W)` layout."""
         images = []
         for key in self.image_keys:
             if key not in obs:
@@ -193,12 +210,13 @@ class ACTPolicy(ChunkPolicy):
         return action[0]
 
     def forward(self, obs):
+        """Predict an action chunk from the current observation dict."""
         if not isinstance(obs, dict):
             raise TypeError("ACTPolicy expects a dict of observations")
         device = next(self.parameters()).device
         qpos = self._build_qpos(obs).to(device=device, dtype=torch.float32)
         image = self._build_images(obs).to(device=device, dtype=torch.float32)
-        actions, _, _ = self.model(qpos, image, env_state=None)
+        actions, _, _ = self.model(qpos, image)
         if actions.ndim == 2:
             actions = actions.unsqueeze(1)
         if actions.shape[1] != self.predict_horizon:
@@ -209,6 +227,7 @@ class ACTPolicy(ChunkPolicy):
         return actions
 
     def compute_loss(self, batch, reduction="mean", return_stats=False):
+        """Compute ACT reconstruction + KL loss from a training batch."""
         obs = batch["obs"]
         qpos = self._build_qpos(obs).to(dtype=torch.float32)
         image = self._build_images(obs)
@@ -227,16 +246,27 @@ class ACTPolicy(ChunkPolicy):
         else:
             is_pad = action_mask[:, : actions.shape[1]] <= 0
 
-        a_hat, _, (mu, logvar) = self.model(
-            qpos, image, env_state=None, actions=actions, is_pad=is_pad
+        predicted_actions, _, (mu, logvar) = self.model(
+            qpos, image, actions=actions, is_pad=is_pad
         )
-        total_kld = _kl_divergence(mu, logvar)[0][0]
-        all_l1 = torch.abs(actions - a_hat)
-        l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
-        loss = l1 + total_kld * self.kl_weight
+        total_kld_mean, _, _ = _kl_divergence(mu, logvar)
+        total_kld_mean = total_kld_mean[0]
+        action_l1 = torch.abs(actions - predicted_actions)
 
         if reduction not in ("mean", "sum"):
             raise NotImplementedError("Only mean/sum reductions are supported for ACT.")
+        valid_mask = (~is_pad).unsqueeze(-1).to(dtype=action_l1.dtype)
+        l1_sum = (action_l1 * valid_mask).sum()
+        valid_steps = valid_mask.sum()
+        l1 = l1_sum / (valid_steps * action_l1.shape[-1]).clamp_min(1.0)
+
+        if reduction == "mean":
+            total_kld = total_kld_mean
+            loss = l1 + total_kld * self.kl_weight
+        else:
+            batch_size = actions.shape[0]
+            total_kld = total_kld_mean * batch_size
+            loss = l1_sum + total_kld * self.kl_weight
 
         if not return_stats:
             return loss

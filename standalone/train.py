@@ -561,6 +561,7 @@ def main(cfg: TrainConfig) -> None:
             video_dir = save_dir / "rollout_videos" / "val" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,
+                bddl_file=cfg.rollout.bddl_file,
                 steps=int(cfg.rollout.steps),
                 warmup_steps=int(cfg.rollout.warmup_steps),
                 n_rollouts=len(rollout_indices),

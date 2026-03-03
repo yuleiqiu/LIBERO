@@ -1,5 +1,10 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-"""Action Chunking Transformer (DETR-VAE) model."""
+"""Action Chunking Transformer (DETR-VAE) model.
+
+This module intentionally keeps the original parameter names for checkpoint
+compatibility, while using clearer local variable names and comments so the VAE
+training/inference paths are easier to follow.
+"""
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -11,7 +16,7 @@ from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
 
 def reparametrize(mu: Tensor, logvar: Tensor) -> Tensor:
-    """Sample a latent vector using reparameterization."""
+    """Sample a latent vector from the posterior parameterized by ``mu``/``logvar``."""
     std = logvar.div(2).exp()
     eps = Variable(std.data.new(std.size()).normal_())
     return mu + std * eps
@@ -33,7 +38,20 @@ def get_sinusoid_encoding_table(n_position: int, d_hid: int) -> Tensor:
 
 
 class ACTModel(nn.Module):
-    """Action Chunking Transformer (DETR-VAE) model."""
+    """Action Chunking Transformer (DETR-VAE) model.
+
+    The model has two execution modes:
+
+    - Training: encode the target action chunk with a VAE encoder to obtain a
+      latent sample, then decode the future action chunk conditioned on the
+      current robot state and images.
+    - Inference: skip the VAE encoder and use a zero latent embedding while
+      decoding actions from the current observation only.
+
+    Note: attribute/module names are kept stable to avoid checkpoint key
+    changes. Readability improvements here are limited to comments and local
+    variables.
+    """
 
     def __init__(
         self,
@@ -58,13 +76,12 @@ class ACTModel(nn.Module):
         if encoder is None:
             encoder = build_encoder(config)
 
-        if backbones is not None:
-            if len(backbones) == 0:
-                raise ValueError("backbones must be a non-empty list or None.")
-            if camera_names and len(backbones) != len(camera_names):
-                raise ValueError(
-                    "backbones length must match camera_names length when using image inputs."
-                )
+        if backbones is None or len(backbones) == 0:
+            raise ValueError("ACTModel requires at least one image backbone.")
+        if camera_names and len(backbones) != len(camera_names):
+            raise ValueError(
+                "backbones length must match camera_names length when using image inputs."
+            )
 
         super().__init__()
         self.chunk_size = int(chunk_size)
@@ -77,113 +94,108 @@ class ACTModel(nn.Module):
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(self.chunk_size, hidden_dim)
-        if backbones is not None:
-            if not self.camera_names:
-                raise ValueError("camera_names must be provided when using image backbones.")
-            self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
-            self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(self.proprio_dim, hidden_dim)
-        else:
-            # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(self.proprio_dim, hidden_dim)
-            self.input_proj_env_state = nn.Linear(7, hidden_dim)
-            self.pos = torch.nn.Embedding(2, hidden_dim)
-            self.backbones = None
+        if not self.camera_names:
+            raise ValueError("camera_names must be provided when using image backbones.")
+        self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
+        self.backbones = nn.ModuleList(backbones)
+        self.input_proj_robot_state = nn.Linear(self.proprio_dim, hidden_dim)
 
-        # encoder extra parameters
-        self.latent_dim = 32  # final size of latent z # TODO tune
-        self.cls_embed = nn.Embedding(1, hidden_dim)  # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(action_dim, hidden_dim)  # action to embedding
-        self.encoder_joint_proj = nn.Linear(self.proprio_dim, hidden_dim)  # qpos to embedding
-        self.latent_proj = nn.Linear(hidden_dim, self.latent_dim * 2)  # latent std/var
+        # VAE encoder components: [CLS, proprio, action_chunk] -> latent posterior.
+        self.latent_dim = 32  # Size of z. Kept fixed for checkpoint compatibility.
+        self.cls_embed = nn.Embedding(1, hidden_dim)
+        self.encoder_action_proj = nn.Linear(action_dim, hidden_dim)
+        self.encoder_joint_proj = nn.Linear(self.proprio_dim, hidden_dim)
+        self.latent_proj = nn.Linear(hidden_dim, self.latent_dim * 2)
         self.register_buffer(
             "pos_table",
             get_sinusoid_encoding_table(1 + 1 + self.chunk_size, hidden_dim),
-        )  # [CLS], qpos, action_seq
+        )  # Positional encodings for [CLS, proprio, action_chunk].
 
-        # decoder extra parameters
-        self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim)  # latent to embedding
-        self.additional_pos_embed = nn.Embedding(2, hidden_dim)  # proprio + latent positions
+        # Decoder conditioning components: latent embedding + proprio embedding.
+        self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim)
+        self.additional_pos_embed = nn.Embedding(2, hidden_dim)
 
     def forward(
         self,
         qpos: Tensor,
         image: Tensor,
-        env_state: Optional[Tensor],
         actions: Optional[Tensor] = None,
         is_pad: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, List[Optional[Tensor]]]:
-        """Run the model and return actions, padding logits, and latent stats."""
-        is_training = actions is not None  # train or val
-        bs, _ = qpos.shape
+        """Run the model and return action chunk, padding logits, and latent stats."""
+        is_training = actions is not None
+        batch_size, _ = qpos.shape
         
         if is_training:
-            ## Obtain latent z from encoder during trainning.
-            # project action sequence to embedding dim, and concat with a CLS token
-            action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
-            qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
-            qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
-            cls_embed = self.cls_embed.weight # (1, hidden_dim)
-            cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
-            # do not mask cls token
-            cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
-            # obtain position embedding
-            pos_embed = self.pos_table.clone().detach()
-            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
-            # query model
-            encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
-            encoder_output = encoder_output[0] # take cls output only
-            latent_info = self.latent_proj(encoder_output)
-            mu = latent_info[:, :self.latent_dim]
-            logvar = latent_info[:, self.latent_dim:]
+            # Training path: encode [CLS, proprio, target_action_chunk] into a
+            # latent posterior, then sample z via reparameterization.
+            action_embeddings = self.encoder_action_proj(actions)
+            proprio_embeddings = self.encoder_joint_proj(qpos).unsqueeze(1)
+            cls_embedding = self.cls_embed.weight.unsqueeze(0).repeat(batch_size, 1, 1)
+
+            encoder_tokens = torch.cat(
+                [cls_embedding, proprio_embeddings, action_embeddings], axis=1
+            )
+            encoder_tokens = encoder_tokens.permute(1, 0, 2)
+
+            # The prepended CLS/proprio tokens are always valid; only the target
+            # action chunk may contain padded steps from dataset slicing.
+            cls_proprio_is_pad = torch.full((batch_size, 2), False).to(qpos.device)
+            encoder_is_pad = torch.cat([cls_proprio_is_pad, is_pad], axis=1)
+
+            encoder_pos_embed = self.pos_table.clone().detach().permute(1, 0, 2)
+            encoder_output = self.encoder(
+                encoder_tokens,
+                pos=encoder_pos_embed,
+                src_key_padding_mask=encoder_is_pad,
+            )
+            # Only the CLS token is used to parameterize the posterior over z.
+            cls_output = encoder_output[0]
+            latent_stats = self.latent_proj(cls_output)
+            mu = latent_stats[:, : self.latent_dim]
+            logvar = latent_stats[:, self.latent_dim :]
             latent_sample = reparametrize(mu, logvar)
-            latent_input = self.latent_out_proj(latent_sample)
+            latent_embedding = self.latent_out_proj(latent_sample)
         else:
-            ## During inference, z is sampled from standard Gaussian.
+            # Inference path: no target action chunk is available, so we skip
+            # the VAE encoder and decode with a zero latent embedding.
             mu = logvar = None
-            latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
-            latent_input = self.latent_out_proj(latent_sample)
+            latent_sample = torch.zeros(
+                [batch_size, self.latent_dim], dtype=torch.float32
+            ).to(qpos.device)
+            latent_embedding = self.latent_out_proj(latent_sample)
 
-        if self.backbones is not None:
-            # Image observation features and position embeddings
-            all_cam_features = []
-            all_cam_pos = []
-            for cam_id, _ in enumerate(self.camera_names):
-                features, pos = self.backbones[cam_id](image[:, cam_id])
-                features = features[-1]  # take the last layer feature
-                pos = pos[-1]
-                all_cam_features.append(self.input_proj(features))
-                all_cam_pos.append(pos)
-            # proprioception features
-            proprio_input = self.input_proj_robot_state(qpos)
-            # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
-            pos = torch.cat(all_cam_pos, axis=3)
+        # Encode each camera independently, then concatenate feature maps
+        # across cameras along the width dimension, matching original ACT.
+        camera_features = []
+        camera_positions = []
+        for cam_id, _ in enumerate(self.camera_names):
+            features, pos = self.backbones[cam_id](image[:, cam_id])
+            feature_map = features[-1]
+            position_map = pos[-1]
+            camera_features.append(self.input_proj(feature_map))
+            camera_positions.append(position_map)
 
-            # Note: ACT paper says they use the last layer output,
-            # but their code uess the first layer output.
-            # The origion code is: hs = self.transformer(...)[0]
-            # We change it to match the paper.
-            hs = self.transformer(
-                src=src,
-                mask=None,
-                query_embed=self.query_embed.weight,
-                pos_embed=pos,
-                latent_input=latent_input,
-                proprio_input=proprio_input,
-                additional_pos_embed=self.additional_pos_embed.weight
-            )[-1]
-        else:
-            qpos = self.input_proj_robot_state(qpos)
-            env_state = self.input_proj_env_state(env_state)
-            transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
-            hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
-        a_hat = self.action_head(hs)
-        is_pad_hat = self.is_pad_head(hs)
-        return a_hat, is_pad_hat, [mu, logvar]
+        proprio_embedding = self.input_proj_robot_state(qpos)
+        image_features = torch.cat(camera_features, axis=3)
+        image_positions = torch.cat(camera_positions, axis=3)
+
+        # The ACT paper describes using the last decoder layer output. The
+        # original reference code indexes the first layer instead. We keep
+        # the paper-aligned behavior here.
+        decoder_hidden_states = self.transformer(
+            src=image_features,
+            mask=None,
+            query_embed=self.query_embed.weight,
+            pos_embed=image_positions,
+            latent_input=latent_embedding,
+            proprio_input=proprio_embedding,
+            additional_pos_embed=self.additional_pos_embed.weight,
+        )[-1]
+
+        predicted_actions = self.action_head(decoder_hidden_states)
+        predicted_is_pad = self.is_pad_head(decoder_hidden_states)
+        return predicted_actions, predicted_is_pad, [mu, logvar]
 
 
 
@@ -193,12 +205,13 @@ def build_encoder(config: Any) -> TransformerEncoder:
     dropout = config.dropout
     nhead = config.nheads
     dim_feedforward = config.dim_feedforward
-    num_encoder_layers = config.enc_layers  # 4 # TODO shared with VAE decoder
-    normalize_before = config.pre_norm  # False
+    num_encoder_layers = config.enc_layers
+    normalize_before = config.pre_norm
     activation = "relu"
 
-    encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                            dropout, activation, normalize_before)
+    encoder_layer = TransformerEncoderLayer(
+        d_model, nhead, dim_feedforward, dropout, activation, normalize_before
+    )
     encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
     encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
 
