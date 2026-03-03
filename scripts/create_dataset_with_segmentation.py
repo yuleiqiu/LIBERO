@@ -12,6 +12,10 @@ import init_path
 import libero.libero.utils.utils as libero_utils
 from libero.libero import get_libero_path
 from libero.libero.envs import TASK_MAPPING
+from standalone.utils.bddl_path_utils import (
+    canonicalize_bddl_file_name,
+    resolve_bddl_path,
+)
 
 
 CAMERA_SPECS = (
@@ -87,6 +91,7 @@ def main():
 
     replay_hdf5_path = args.demo_file
     with h5py.File(replay_hdf5_path, "r") as f:
+        demo_path = Path(replay_hdf5_path).expanduser().resolve()
         env_name = f["data"].attrs["env"]
         env_kwargs = json.loads(f["data"].attrs["env_info"])
 
@@ -94,7 +99,10 @@ def main():
         problem_name = problem_info["problem_name"]
 
         demos = list(f["data"].keys())
-        bddl_file_name = f["data"].attrs["bddl_file_name"]
+        bddl_file_name = canonicalize_bddl_file_name(f["data"].attrs["bddl_file_name"])
+        resolved_bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
+        if resolved_bddl_path is None:
+            raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
 
         hdf5_path = _build_output_path(
             bddl_file_name=bddl_file_name,
@@ -114,7 +122,7 @@ def main():
 
             libero_utils.update_env_kwargs(
                 env_kwargs,
-                bddl_file_name=bddl_file_name,
+                bddl_file_name=resolved_bddl_path,
                 has_renderer=not args.use_camera_obs,
                 has_offscreen_renderer=args.use_camera_obs,
                 ignore_done=True,
@@ -128,7 +136,7 @@ def main():
                 camera_segmentations="instance" if args.use_segmentation else None,
             )
 
-            with open(bddl_file_name, "r") as bddl_file:
+            with open(resolved_bddl_path, "r") as bddl_file:
                 bddl_file_content = bddl_file.read()
 
             grp.attrs["bddl_file_name"] = bddl_file_name
@@ -142,8 +150,11 @@ def main():
                     "type": 1,
                     "env_name": env_name,
                     "problem_name": problem_name,
-                    "bddl_file": f["data"].attrs["bddl_file_name"],
-                    "env_kwargs": env_kwargs,
+                    "bddl_file": bddl_file_name,
+                    "env_kwargs": {
+                        **env_kwargs,
+                        "bddl_file_name": bddl_file_name,
+                    },
                 }
 
                 grp.attrs["env_args"] = json.dumps(env_args)

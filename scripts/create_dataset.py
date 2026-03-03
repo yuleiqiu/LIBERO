@@ -16,6 +16,10 @@ from robosuite.utils import camera_utils
 
 from libero.libero.envs import *
 from libero.libero import get_libero_path
+from standalone.utils.bddl_path_utils import (
+    canonicalize_bddl_file_name,
+    resolve_bddl_path,
+)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -62,11 +66,13 @@ def main():
     # list of all demonstrations episodes
     demos = list(f["data"].keys())
 
-    bddl_file_name = f["data"].attrs["bddl_file_name"]
+    demo_path = Path(hdf5_path).expanduser().resolve()
+    bddl_file_name = canonicalize_bddl_file_name(f["data"].attrs["bddl_file_name"])
+    resolved_bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
+    if resolved_bddl_path is None:
+        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
 
     bddl_file_dir = os.path.dirname(bddl_file_name)
-    replace_bddl_prefix = "/".join(bddl_file_dir.split("bddl_files/")[:-1] + "bddl_files")
-
     hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_dir.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
 
     output_parent_dir = Path(hdf5_path).parent
@@ -82,7 +88,7 @@ def main():
 
     libero_utils.update_env_kwargs(
         env_kwargs,
-        bddl_file_name=bddl_file_name,
+        bddl_file_name=resolved_bddl_path,
         has_renderer=not args.use_camera_obs,
         has_offscreen_renderer=args.use_camera_obs,
         ignore_done=True,
@@ -100,7 +106,7 @@ def main():
     )
 
     grp.attrs["bddl_file_name"] = bddl_file_name
-    grp.attrs["bddl_file_content"] = open(bddl_file_name, "r").read()
+    grp.attrs["bddl_file_content"] = open(resolved_bddl_path, "r").read()
     print(grp.attrs["bddl_file_content"])
 
     env = TASK_MAPPING[problem_name](
@@ -111,8 +117,8 @@ def main():
         "type": 1,
         "env_name": env_name,
         "problem_name": problem_name,
-        "bddl_file": f["data"].attrs["bddl_file_name"],
-        "env_kwargs": env_kwargs,
+        "bddl_file": bddl_file_name,
+        "env_kwargs": {**env_kwargs, "bddl_file_name": bddl_file_name},
     }
 
     grp.attrs["env_args"] = json.dumps(env_args)

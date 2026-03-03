@@ -8,12 +8,14 @@ import os
 import robosuite as suite
 import time
 from glob import glob
+from pathlib import Path
 from robosuite import load_controller_config
 from robosuite.wrappers import DataCollectionWrapper, VisualizationWrapper
 from robosuite.utils.input_utils import input2action
 
 import libero.libero.envs.bddl_utils as BDDLUtils
 from libero.libero.envs import *
+from standalone.utils.bddl_path_utils import canonicalize_bddl_file_name
 
 
 def sanitize_ranges(raw_ranges):
@@ -138,6 +140,8 @@ def get_next_demo_index(grp):
 
 
 def ensure_hdf5_group(f, env_info, args, env_name):
+    bddl_ref = canonicalize_bddl_file_name(args.bddl_file)
+    bddl_path = Path(args.bddl_file).expanduser().resolve()
     if "data" in f:
         grp = f["data"]
     else:
@@ -153,11 +157,9 @@ def ensure_hdf5_group(f, env_info, args, env_name):
     if "problem_info" not in grp.attrs:
         grp.attrs["problem_info"] = json.dumps(problem_info)
     if "bddl_file_name" not in grp.attrs:
-        grp.attrs["bddl_file_name"] = args.bddl_file
+        grp.attrs["bddl_file_name"] = bddl_ref
     if "bddl_file_content" not in grp.attrs:
-        grp.attrs["bddl_file_content"] = str(
-            open(args.bddl_file, "r", encoding="utf-8")
-        )
+        grp.attrs["bddl_file_content"] = bddl_path.read_text(encoding="utf-8")
     if "env" not in grp.attrs and env_name is not None:
         grp.attrs["env"] = env_name
 
