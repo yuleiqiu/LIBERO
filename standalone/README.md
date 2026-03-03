@@ -1,10 +1,12 @@
 # Standalone Structure
 
 Docs live under `standalone/docs`:
+
 - `standalone/docs/README.md`
 - `standalone/docs/training.md`
 - `standalone/docs/policy_dp.md`
 - `standalone/docs/policy_act.md`
+- `standalone/docs/rollout.md`
 
 This folder hosts the training/rollout pipeline plus reusable model components.
 The goal is to keep algorithm internals separate from policy wrappers so we can

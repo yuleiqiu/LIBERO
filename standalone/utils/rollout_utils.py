@@ -419,6 +419,126 @@ def stack_obs_batch(
     return batch
 
 
+def build_per_env_temporal_ensemblers(model: Any, env_num: int) -> Optional[List[Any]]:
+    """Create one temporal ensembler per env when the policy uses ACT-style temporal ensembling."""
+    temporal_ensembler = getattr(model, "temporal_ensembler", None)
+    temporal_ensemble_coeff = getattr(model, "temporal_ensemble_coeff", None)
+    if temporal_ensembler is None or temporal_ensemble_coeff is None:
+        return None
+    ensembler_cls = temporal_ensembler.__class__
+    return [
+        ensembler_cls(float(temporal_ensemble_coeff), int(model.predict_horizon))
+        for _ in range(int(env_num))
+    ]
+
+
+def seed_rollout_env(env: Any, seed: int, env_num: int) -> None:
+    """Seed a single env or all envs in a vector env with the configured rollout seed."""
+    if env_num == 1:
+        env.seed(seed)
+    else:
+        env.seed([int(seed)] * env_num)
+
+
+def build_histories(cfg: Any, obs_keys: Sequence[str], image_keys: Sequence[str], env_num: int):
+    """Create one observation history buffer per active env slot."""
+    return [
+        ObsHistory(
+            obs_keys + image_keys,
+            cfg.data.obs_horizon,
+            image_keys=image_keys,
+            image_norm=cfg.data.image_norm,
+        )
+        for _ in range(env_num)
+    ]
+
+
+def reset_rollout_runtime(model: Any, histories: Sequence["ObsHistory"], temporal_ensemblers) -> None:
+    """Reset policy runtime state and per-env rollout buffers at episode/batch start."""
+    model.reset()
+    for history in histories:
+        history.reset()
+    if temporal_ensemblers is not None:
+        for ensembler in temporal_ensemblers:
+            ensembler.reset()
+
+
+def set_init_state_batch(env: Any, init_states_batch: np.ndarray, env_num: int):
+    """Apply init states to the env and return one observation dict per env slot."""
+    init_arg = init_states_batch[0] if env_num == 1 else init_states_batch
+    env_obs = env.set_init_state(init_arg)
+    return split_env_obs(env_obs, env_num)
+
+
+def step_env_batch(env: Any, actions: np.ndarray, env_num: int):
+    """Step a single env or vector env and normalize outputs to batched lists/arrays."""
+    step_arg = actions[0] if env_num == 1 else actions
+    env_obs, _, done, _ = env.step(step_arg)
+    env_obs_list = split_env_obs(env_obs, env_num)
+    if env_num == 1:
+        done_array = np.asarray([bool(done)])
+    else:
+        done_array = np.asarray(done)
+    return env_obs_list, done_array
+
+
+def pending_env_indices(remaining: int, dones, action_queues, temporal_ensemblers):
+    """Return env indices whose action queues need refilling at the current step."""
+    if temporal_ensemblers is None:
+        return [
+            i
+            for i in range(remaining)
+            if not dones[i] and len(action_queues[i]) == 0
+        ]
+    return [i for i in range(remaining) if not dones[i]]
+
+
+def pop_actions(action_queues, dones, remaining: int, env_num: int, action_dim: int) -> np.ndarray:
+    """Pop one executable action per active env and pack them into a batched action array."""
+    actions = np.zeros((env_num, action_dim), dtype=np.float32)
+    for i in range(remaining):
+        if dones[i]:
+            continue
+        if action_queues[i]:
+            act = action_queues[i].popleft()
+            if torch.is_tensor(act):
+                act = act.detach().cpu().numpy()
+            actions[i] = np.asarray(act).reshape(-1)
+    return actions
+
+
+def refill_action_queues(
+    model: Any,
+    obs_batch: Mapping[str, Any],
+    pending: Sequence[int],
+    action_queues: Sequence[deque],
+    temporal_ensemblers: Optional[Sequence[Any]] = None,
+) -> None:
+    """Predict action chunks for pending envs and store executable actions in per-env queues."""
+    if not pending:
+        return
+
+    model.eval()
+    with torch.no_grad():
+        pred = model.forward(obs_batch)
+    if torch.is_tensor(pred):
+        pred = pred.detach().cpu()
+    if pred.ndim == 2:
+        pred = pred.view(pred.shape[0], model.predict_horizon, -1)
+
+    if temporal_ensemblers is None:
+        for batch_idx, env_idx in enumerate(pending):
+            actions_seq = pred[batch_idx]
+            take = min(model.exec_horizon, actions_seq.shape[0])
+            for step_action in actions_seq[:take]:
+                action_queues[env_idx].append(step_action)
+        return
+
+    for batch_idx, env_idx in enumerate(pending):
+        action = temporal_ensemblers[env_idx].update(pred[batch_idx : batch_idx + 1])[0]
+        action_queues[env_idx].append(action)
+
+
 class ObsHistory:
     """Rolling buffer of recent observations for obs_horizon stacking."""
 
@@ -494,7 +614,8 @@ def build_rollout_summary(
             "success": int(successes),
             "rollouts": int(n_rollouts),
             "success_rate": float(sr),
-        }
+        },
+        "episode_results": [dict(result) for result in episode_results],
     }
     anchor_counts: Dict[int, int] = defaultdict(int)
     anchor_success: Dict[int, int] = defaultdict(int)

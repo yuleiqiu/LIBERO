@@ -17,10 +17,11 @@ from libero.libero.utils.video_utils import VideoWriter
 
 from standalone.configs import apply_policy_config
 from standalone.configs.rollout import SegRolloutConfig
-from standalone.rollout_env import (
-    ObsHistory,
+from standalone.utils.rollout_utils import (
     _derive_eval_video_dir,
     apply_ckpt_config,
+    build_histories,
+    build_per_env_temporal_ensemblers,
     build_obs_key_mapping,
     build_rollout_summary,
     camera_names_from_mapping,
@@ -29,12 +30,18 @@ from standalone.rollout_env import (
     infer_rollout_io_specs,
     load_anchor_indices,
     load_init_states,
+    pending_env_indices,
+    pop_actions,
+    refill_action_queues,
     read_env_kwargs_from_hdf5,
+    reset_rollout_runtime,
     resolve_rollout_bddl_path,
     resolve_video_dir,
+    seed_rollout_env,
     select_video_camera,
-    split_env_obs,
+    set_init_state_batch,
     stack_obs_batch,
+    step_env_batch,
     write_rollout_summary,
 )
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
@@ -449,152 +456,18 @@ def run_env_rollouts(
     if max_steps <= 0:
         raise ValueError("steps must be >= 1")
 
-    episode_results = []
     if env_num == 1:
         env = SegmentationRenderEnv(**env_args)
-        env.seed(cfg.data.seed)
-        history = ObsHistory(
-            obs_keys + image_keys,
-            cfg.data.obs_horizon,
-            image_keys=image_keys,
-            image_norm=cfg.data.image_norm,
-        )
-        successes = 0
+    else:
+        env = SubprocVectorEnv([lambda: SegmentationRenderEnv(**env_args) for _ in range(env_num)])
+    seed_rollout_env(env, int(cfg.data.seed), env_num)
+    histories = build_histories(cfg, obs_keys, image_keys, env_num)
 
-        for ep_idx, init_idx in enumerate(rollout_order):
-            model.reset()
-            history.reset()
-            env.reset()
-            env_obs = env.set_init_state(init_states[init_idx])
-            video_writer = _ensure_video_camera(video_writer, video_camera, env_obs)
-
-            masked_obs = _mask_env_obs_single(
-                env_obs,
-                env,
-                image_keys,
-                obs_key_mapping,
-                mode=seg_mode,
-                fill_value=seg_fill_value,
-                blur_ksize=seg_blur_ksize,
-                blur_sigma=seg_blur_sigma,
-                blur_alpha=seg_blur_alpha,
-            )
-            obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
-            history.add(obs)
-
-            dummy = np.zeros((action_dim,), dtype=np.float32)
-            for _ in range(int(cfg.warmup_steps)):
-                env_obs, _, _, _ = env.step(dummy)
-                masked_obs = _mask_env_obs_single(
-                    env_obs,
-                    env,
-                    image_keys,
-                    obs_key_mapping,
-                    mode=seg_mode,
-                    fill_value=seg_fill_value,
-                    blur_ksize=seg_blur_ksize,
-                    blur_sigma=seg_blur_sigma,
-                    blur_alpha=seg_blur_alpha,
-                )
-                obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
-                history.add(obs)
-
-            done = False
-            steps_taken = 0
-            while steps_taken < max_steps:
-                steps_taken += 1
-                obs_input = history.stack()
-                action = model.get_action(obs_input)
-                if torch.is_tensor(action):
-                    action_np = action.detach().cpu().numpy()
-                else:
-                    action_np = np.asarray(action)
-                action_np = action_np.reshape(-1)
-
-                env_obs, _, done, _ = env.step(action_np)
-                if video_writer and ep_idx < save_videos:
-                    if video_show_masks:
-                        frame = _build_mask_grid(
-                            env_obs,
-                            env,
-                            video_cameras,
-                            mode=seg_mode,
-                            fill_value=seg_fill_value,
-                            blur_ksize=seg_blur_ksize,
-                            blur_sigma=seg_blur_sigma,
-                            blur_alpha=seg_blur_alpha,
-                        )
-                        if frame is not None:
-                            video_writer.append_image(frame, idx=ep_idx)
-                    else:
-                        video_writer.append_obs(
-                            env_obs, done=bool(done), idx=ep_idx, camera_name=video_camera
-                        )
-                masked_obs = _mask_env_obs_single(
-                    env_obs,
-                    env,
-                    image_keys,
-                    obs_key_mapping,
-                    mode=seg_mode,
-                    fill_value=seg_fill_value,
-                    blur_ksize=seg_blur_ksize,
-                    blur_sigma=seg_blur_sigma,
-                    blur_alpha=seg_blur_alpha,
-                )
-                obs = extract_env_obs(masked_obs, obs_keys, image_keys, obs_key_mapping)
-                history.add(obs)
-
-                if done:
-                    successes += 1
-                    break
-
-            print(
-                f"[rollout] episode {ep_idx} | init_state {init_idx} | steps {steps_taken} | success {done}"
-            )
-            result = {
-                "rollout_idx": ep_idx,
-                "init_idx": init_idx,
-                "success": bool(done),
-                "steps": steps_taken,
-            }
-            if anchor_ids is not None:
-                result["anchor_id"] = int(anchor_ids[init_idx])
-            episode_results.append(result)
-
-        env.close()
-        if video_writer:
-            video_writer.save()
-        sr = successes / max(n_rollouts, 1)
-        print("[info] rollout summary:")
-        print(f"  rollouts: {n_rollouts}")
-        print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
-        summary = build_rollout_summary(n_rollouts, successes, episode_results)
-        summary_path = write_rollout_summary(video_dir, summary)
-        return {
-            "n_rollouts": n_rollouts,
-            "successes": successes,
-            "success_rate": sr,
-            "rollout_order": rollout_order,
-            "episode_results": episode_results,
-            "video_dir": str(video_dir) if video_dir is not None else None,
-            "summary_path": str(summary_path) if summary_path is not None else None,
-        }
-
-    env = SubprocVectorEnv([lambda: SegmentationRenderEnv(**env_args) for _ in range(env_num)])
-    env.seed(cfg.data.seed)
-    histories = [
-        ObsHistory(
-            obs_keys + image_keys,
-            cfg.data.obs_horizon,
-            image_keys=image_keys,
-            image_norm=cfg.data.image_norm,
-        )
-        for _ in range(env_num)
-    ]
-
+    episode_results = []
     max_record_videos = min(save_videos, n_rollouts)
     record_active = [False] * env_num
     video_ids = [None] * env_num
+    temporal_ensemblers = build_per_env_temporal_ensemblers(model, env_num)
 
     successes = 0
     episodes_done = 0
@@ -602,9 +475,7 @@ def run_env_rollouts(
         if episodes_done >= n_rollouts:
             break
         batch_start = episodes_done
-        model.reset()
-        for history in histories:
-            history.reset()
+        reset_rollout_runtime(model, histories, temporal_ensemblers)
 
         remaining = min(env_num, n_rollouts - episodes_done)
         indices = rollout_order[episodes_done : episodes_done + remaining]
@@ -613,8 +484,7 @@ def run_env_rollouts(
         init_states_batch = init_states[indices]
 
         env.reset()
-        env_obs = env.set_init_state(init_states_batch)
-        env_obs_list = split_env_obs(env_obs, env_num)
+        env_obs_list = set_init_state_batch(env, init_states_batch, env_num)
         video_writer = _ensure_video_camera(video_writer, video_camera, env_obs_list[0])
         if video_writer:
             for i in range(env_num):
@@ -643,8 +513,7 @@ def run_env_rollouts(
 
         dummy = np.zeros((env_num, action_dim), dtype=np.float32)
         for _ in range(int(cfg.warmup_steps)):
-            env_obs, _, _, _ = env.step(dummy)
-            env_obs_list = split_env_obs(env_obs, env_num)
+            env_obs_list, _ = step_env_batch(env, dummy, env_num)
             masked_list = _mask_env_obs_batch(
                 env_obs_list,
                 env,
@@ -669,46 +538,28 @@ def run_env_rollouts(
         steps_taken = 0
         while steps_taken < max_steps:
             steps_taken += 1
-            pending = [
-                i
-                for i in range(remaining)
-                if not dones[i] and len(action_queues[i]) == 0
-            ]
+            pending = pending_env_indices(
+                remaining, dones, action_queues, temporal_ensemblers
+            )
             if pending:
                 obs_list = [histories[i].stack() for i in pending]
                 obs_batch = stack_obs_batch(obs_list, obs_keys, image_keys)
-                model.eval()
-                with torch.no_grad():
-                    pred = model.forward(obs_batch)
-                if torch.is_tensor(pred):
-                    pred = pred.detach().cpu()
-                if pred.ndim == 2:
-                    pred = pred.view(pred.shape[0], model.predict_horizon, -1)
-                for idx, env_idx in enumerate(pending):
-                    actions_seq = pred[idx]
-                    take = min(model.exec_horizon, actions_seq.shape[0])
-                    for step_action in actions_seq[:take]:
-                        action_queues[env_idx].append(step_action)
+                refill_action_queues(
+                    model,
+                    obs_batch,
+                    pending,
+                    action_queues,
+                    temporal_ensemblers=temporal_ensemblers,
+                )
 
-            actions = np.zeros((env_num, action_dim), dtype=np.float32)
-            for i in range(remaining):
-                if dones[i]:
-                    continue
-                if action_queues[i]:
-                    act = action_queues[i].popleft()
-                    if torch.is_tensor(act):
-                        act = act.cpu().numpy()
-                    actions[i] = np.asarray(act).reshape(-1)
-
-            env_obs, _, done, _ = env.step(actions)
-            done_array = np.asarray(done)
+            actions = pop_actions(action_queues, dones, remaining, env_num, action_dim)
+            env_obs_list, done_array = step_env_batch(env, actions, env_num)
             for i in range(remaining):
                 if not dones[i]:
                     steps_by_env[i] += 1
                 if bool(done_array[i]):
                     dones[i] = True
 
-            env_obs_list = split_env_obs(env_obs, env_num)
             if video_writer:
                 for i in range(remaining):
                     if record_active[i] and video_ids[i] is not None:
@@ -758,9 +609,10 @@ def run_env_rollouts(
         successes += sum(1 for d in dones[:remaining] if d)
         episodes_done += remaining
 
-        print(
-            f"[rollout] batch {loop_idx} | episodes {episodes_done}/{n_rollouts} | steps {steps_taken}"
-        )
+        if env_num > 1:
+            print(
+                f"[rollout] batch {loop_idx} | episodes {episodes_done}/{n_rollouts} | steps {steps_taken}"
+            )
         for i in range(remaining):
             print(
                 f"[rollout] episode {batch_start + i} | init_state {indices[i]} | "
@@ -782,7 +634,8 @@ def run_env_rollouts(
     sr = successes / max(n_rollouts, 1)
     print("[info] rollout summary:")
     print(f"  rollouts: {n_rollouts}")
-    print(f"  envs: {env_num} (use_mp={use_mp})")
+    if env_num > 1:
+        print(f"  envs: {env_num} (use_mp={use_mp})")
     print(f"  success: {successes}/{n_rollouts} ({sr:.3f})")
     summary = build_rollout_summary(n_rollouts, successes, episode_results)
     summary_path = write_rollout_summary(video_dir, summary)
