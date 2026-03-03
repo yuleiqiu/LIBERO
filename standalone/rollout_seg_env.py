@@ -29,9 +29,8 @@ from standalone.rollout_env import (
     infer_rollout_io_specs,
     load_anchor_indices,
     load_init_states,
-    read_bddl_from_hdf5,
     read_env_kwargs_from_hdf5,
-    resolve_bddl_path,
+    resolve_rollout_bddl_path,
     resolve_video_dir,
     select_video_camera,
     split_env_obs,
@@ -325,12 +324,7 @@ def run_env_rollouts(
     rollout_order_override=None,
     anchor_ids=None,
 ):
-    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
-    if bddl_file_name is None:
-        raise ValueError("bddl_file_name not found in hdf5; cannot create env")
-    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
-    if bddl_path is None:
-        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
+    bddl_path, _, _ = resolve_rollout_bddl_path(cfg, demo_path)
 
     if init_states_override is None:
         init_states = load_init_states(cfg, demo_path)
@@ -341,7 +335,7 @@ def run_env_rollouts(
     camera_names = camera_names_from_mapping(image_keys, obs_key_mapping) if image_keys else []
     cam_hw = infer_camera_size(image_shapes) if image_keys else None
 
-    env_args = {"bddl_file_name": bddl_path, "camera_segmentations": "instance"}
+    env_args = {"bddl_file_name": str(bddl_path), "camera_segmentations": "instance"}
     dataset_env_kwargs = read_env_kwargs_from_hdf5(str(demo_path))
     if dataset_env_kwargs:
         env_args.update(dataset_env_kwargs)

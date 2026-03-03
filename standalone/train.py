@@ -28,6 +28,7 @@ from standalone.utils.train_utils import (
     load_init_states_with_anchors,
     make_episode_split_keys,
     prepare_train_config,
+    rollout_sanity_check,
     sample_per_anchor,
 )
 
@@ -152,6 +153,8 @@ def main(cfg: TrainConfig) -> None:
         raise ValueError("rollout_num_procs must be >= 1")
     if cfg.rollout.env_horizon <= 0:
         raise ValueError("rollout.env_horizon must be >= 1")
+    if rollout_every > 0:
+        rollout_sanity_check(cfg, demo_path)
     save_topk = int(getattr(cfg.training, "save_topk", 0) or 0)
     if save_topk > 0:
         if rollout_every <= 0:

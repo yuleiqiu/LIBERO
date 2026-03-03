@@ -36,6 +36,10 @@ class TrainLoopConfig:
 @dataclass
 class TrainRolloutConfig:
     every: int = 20
+    bddl_file: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional BDDL override for rollout env/init resolution."},
+    )
     init_states_dir: Optional[str] = field(
         default="./libero/libero/init_files",
         metadata={
@@ -44,6 +48,10 @@ class TrainRolloutConfig:
                 "Use the directory, not a single .init file."
             )
         },
+    )
+    init_states_file: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional explicit .pruned_init file override for rollout."},
     )
     env_horizon: int = 2000
     per_anchor: int = 2

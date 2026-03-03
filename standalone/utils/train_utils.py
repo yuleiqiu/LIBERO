@@ -16,6 +16,11 @@ import torch
 
 from standalone.configs import TrainConfig, apply_policy_config, serialize_policy_config
 from standalone.configs.data import DataConfig
+from standalone.utils.bddl_path_utils import (
+    canonicalize_bddl_file_name,
+    read_bddl_from_hdf5 as _read_bddl_from_hdf5,
+    resolve_bddl_path as _resolve_bddl_path,
+)
 
 TRAIN_CONFIG_NAME = "train_config.json"
 _RUN_DIR_PATTERN = re.compile(r"^run_(\d+)$")
@@ -302,28 +307,12 @@ def make_episode_split_keys(
 # --- Rollout/init state helpers ---
 def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
     """Read the BDDL file name from an HDF5 dataset."""
-    with h5py.File(hdf5_path, "r") as f:
-        data = f["data"]
-        return data.attrs.get("bddl_file_name", None)
+    return _read_bddl_from_hdf5(hdf5_path)
 
 
 def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optional[str]:
     """Resolve a BDDL path from absolute, repo, or demo-relative locations."""
-    if not bddl_file_name:
-        return None
-    candidate = Path(bddl_file_name).expanduser()
-    if candidate.is_absolute() and candidate.exists():
-        return str(candidate)
-    if candidate.exists():
-        return str(candidate.resolve())
-    repo_root = Path(__file__).resolve().parents[2]
-    repo_candidate = (repo_root / "libero/libero/bddl_files" / candidate).resolve()
-    if repo_candidate.exists():
-        return str(repo_candidate)
-    demo_candidate = (demo_path.parent / candidate).resolve()
-    if demo_candidate.exists():
-        return str(demo_candidate)
-    return None
+    return _resolve_bddl_path(bddl_file_name, demo_path)
 
 
 def resolve_init_states_dir(cfg: Any) -> Path:
@@ -338,18 +327,108 @@ def resolve_init_states_dir(cfg: Any) -> Path:
     return Path(get_libero_path("init_states")).expanduser().resolve()
 
 
+def resolve_rollout_bddl_path(cfg: Any, demo_path: Path) -> Tuple[Path, Optional[str], str]:
+    """Resolve the rollout BDDL path from explicit override or HDF5 metadata."""
+    rollout_cfg = getattr(cfg, "rollout", None)
+    bddl_override = getattr(rollout_cfg, "bddl_file", None)
+    if bddl_override:
+        bddl_path = resolve_bddl_path(bddl_override, demo_path)
+        if bddl_path is None:
+            raise FileNotFoundError(f"rollout.bddl_file not found: {bddl_override}")
+        return Path(bddl_path), canonicalize_bddl_file_name(bddl_override), "rollout.bddl_file"
+
+    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
+    if bddl_file_name is None:
+        raise ValueError("bddl_file_name not found in hdf5; cannot resolve rollout bddl")
+    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
+    if bddl_path is None:
+        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
+    return Path(bddl_path), canonicalize_bddl_file_name(bddl_file_name), "data.attrs[bddl_file_name]"
+
+
+def resolve_rollout_init_states_path(
+    cfg: Any, demo_path: Path, bddl_path: Optional[Path] = None
+) -> Tuple[Path, str]:
+    """Resolve training-time rollout init-states path from override or BDDL-derived path."""
+    rollout_cfg = getattr(cfg, "rollout", None)
+    init_states_file = getattr(rollout_cfg, "init_states_file", None)
+    if init_states_file:
+        init_states_path = Path(init_states_file).expanduser().resolve()
+        if not init_states_path.exists():
+            raise FileNotFoundError(
+                f"rollout.init_states_file not found: {init_states_path}"
+            )
+        return init_states_path, "rollout.init_states_file"
+
+    if bddl_path is None:
+        bddl_path, _, _ = resolve_rollout_bddl_path(cfg, demo_path)
+    init_dir = resolve_init_states_dir(cfg)
+    init_states_path = init_dir / bddl_path.parent.name / f"{bddl_path.stem}.pruned_init"
+    return init_states_path, "rollout.init_states_dir"
+
+
+def rollout_sanity_check(cfg: Any, demo_path: Path) -> Dict[str, Any]:
+    """Resolve rollout BDDL/init paths early and warn on suspicious mismatches."""
+    details: Dict[str, Any] = {"demo_path": str(demo_path)}
+    try:
+        bddl_path, bddl_ref, bddl_source = resolve_rollout_bddl_path(cfg, demo_path)
+        init_states_path, init_source = resolve_rollout_init_states_path(
+            cfg, demo_path, bddl_path=bddl_path
+        )
+    except Exception as exc:
+        print(f"[warning] rollout sanity check failed: {exc}")
+        details["error"] = str(exc)
+        return details
+
+    expected_init_path = (
+        resolve_init_states_dir(cfg)
+        / bddl_path.parent.name
+        / f"{bddl_path.stem}.pruned_init"
+    )
+    anchors_meta = init_states_path.with_suffix(init_states_path.suffix + ".anchors.json")
+
+    details.update(
+        {
+            "bddl_path": str(bddl_path),
+            "bddl_ref": bddl_ref,
+            "bddl_source": bddl_source,
+            "init_states_path": str(init_states_path),
+            "init_source": init_source,
+            "expected_init_states_path": str(expected_init_path),
+            "anchors_meta": str(anchors_meta),
+        }
+    )
+
+    print("[info] rollout path sanity:")
+    print(f"  bddl ({bddl_source}): {bddl_path}")
+    print(f"  init ({init_source}): {init_states_path}")
+    print(f"  anchors: {anchors_meta}")
+
+    if not init_states_path.exists():
+        print(f"[warning] rollout init states missing: {init_states_path}")
+    if not anchors_meta.exists():
+        print(f"[warning] rollout anchors meta missing: {anchors_meta}")
+    if init_states_path != expected_init_path:
+        print(
+            "[warning] rollout init path does not match the BDDL-derived default: "
+            f"{init_states_path} != {expected_init_path}"
+        )
+    if bddl_source != "data.attrs[bddl_file_name]":
+        hdf5_bddl_ref = canonicalize_bddl_file_name(read_bddl_from_hdf5(str(demo_path)))
+        if hdf5_bddl_ref and hdf5_bddl_ref != bddl_ref:
+            print(
+                "[warning] rollout BDDL override differs from HDF5 metadata: "
+                f"{bddl_ref} != {hdf5_bddl_ref}"
+            )
+    return details
+
+
 def load_init_states_with_anchors(
     cfg: Any, demo_path: Path
 ) -> Tuple[np.ndarray, Dict[int, List[int]], Path, List[int]]:
     """Load init states and anchor indices for rollout evaluation."""
-    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
-    if bddl_file_name is None:
-        raise ValueError("bddl_file_name not found in hdf5; cannot resolve init states")
-    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
-    if bddl_path is None:
-        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
-    init_dir = resolve_init_states_dir(cfg)
-    init_states_path = init_dir / Path(bddl_path).parent.name / f"{Path(bddl_path).stem}.pruned_init"
+    bddl_path, _, _ = resolve_rollout_bddl_path(cfg, demo_path)
+    init_states_path, _ = resolve_rollout_init_states_path(cfg, demo_path, bddl_path=bddl_path)
     if not init_states_path.exists():
         raise FileNotFoundError(f"init states file not found: {init_states_path}")
     init_states = torch.load(str(init_states_path), weights_only=False)

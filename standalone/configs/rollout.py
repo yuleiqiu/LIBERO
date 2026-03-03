@@ -11,6 +11,7 @@ class RolloutConfig:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     ckpt: str = ""
     use_ckpt_config: bool = True
+    bddl_file: Optional[str] = None
     init_states: Optional[str] = None
     env_horizon: int = 2000
     steps: int = 8

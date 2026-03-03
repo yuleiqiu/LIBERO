@@ -14,6 +14,11 @@ except ImportError:
     yaml = None
 
 from standalone.configs import DataConfig, PolicyConfig, RolloutConfig
+from standalone.utils.bddl_path_utils import (
+    canonicalize_bddl_file_name,
+    read_bddl_from_hdf5 as _read_bddl_from_hdf5,
+    resolve_bddl_path as _resolve_bddl_path,
+)
 from standalone.dataset_utils.image_normalization import normalize_images
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -118,9 +123,30 @@ def apply_ckpt_config(cfg: Any, cfg_dict: Mapping[str, Any]) -> bool:
 
 def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
     """Read the BDDL file name from HDF5."""
-    with h5py.File(hdf5_path, "r") as f:
-        data = f["data"]
-        return data.attrs.get("bddl_file_name", None)
+    return _read_bddl_from_hdf5(hdf5_path)
+
+
+def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optional[str]:
+    """Resolve a BDDL path from absolute, repo-relative, or demo-relative locations."""
+    return _resolve_bddl_path(bddl_file_name, demo_path)
+
+
+def resolve_rollout_bddl_path(cfg: Any, demo_path: Path) -> Tuple[Path, Optional[str], str]:
+    """Resolve rollout BDDL from explicit override or HDF5 metadata."""
+    bddl_override = getattr(cfg, "bddl_file", None)
+    if bddl_override:
+        bddl_path = resolve_bddl_path(bddl_override, demo_path)
+        if bddl_path is None:
+            raise FileNotFoundError(f"bddl_file override not found: {bddl_override}")
+        return Path(bddl_path), canonicalize_bddl_file_name(bddl_override), "cfg.bddl_file"
+
+    bddl_file_name = read_bddl_from_hdf5(str(demo_path))
+    if bddl_file_name is None:
+        raise ValueError("bddl_file_name not found in hdf5; cannot create env")
+    bddl_path = resolve_bddl_path(bddl_file_name, demo_path)
+    if bddl_path is None:
+        raise FileNotFoundError(f"bddl file not found: {bddl_file_name}")
+    return Path(bddl_path), canonicalize_bddl_file_name(bddl_file_name), "data.attrs[bddl_file_name]"
 
 
 def read_env_kwargs_from_hdf5(hdf5_path: str) -> Dict[str, Any]:
@@ -309,25 +335,6 @@ def build_obs_key_mapping(
     if cfg.data.obs_key_mapping:
         mapping.update(cfg.data.obs_key_mapping)
     return {key: mapping.get(key, key) for key in obs_keys + image_keys}
-
-
-def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optional[str]:
-    """Resolve BDDL file from absolute, repo, or demo-relative locations."""
-    if not bddl_file_name:
-        return None
-    candidate = Path(bddl_file_name).expanduser()
-    if candidate.is_absolute() and candidate.exists():
-        return str(candidate)
-    if candidate.exists():
-        return str(candidate.resolve())
-    repo_candidate = (REPO_ROOT / "libero/libero/bddl_files" / candidate).resolve()
-    if repo_candidate.exists():
-        return str(repo_candidate)
-    demo_candidate = (demo_path.parent / candidate).resolve()
-    if demo_candidate.exists():
-        return str(demo_candidate)
-    return None
-
 
 def infer_camera_size(image_shapes: Mapping[str, Sequence[int]]) -> Optional[Tuple[int, int]]:
     """Infer camera resolution (H, W) from image shapes."""
