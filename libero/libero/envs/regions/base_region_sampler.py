@@ -211,7 +211,7 @@ class MultiRegionRandomSampler(ObjectPositionSampler):
                     for (x, y, z), _, other_obj in placed_objects.values():
                         if (
                             np.linalg.norm((object_x - x, object_y - y))
-                            <= other_obj.horizontal_radius + horizontal_radius
+                            <= 1.5*other_obj.horizontal_radius + horizontal_radius
                         ) and (
                             object_z - z <= other_obj.top_offset[-1] - bottom_offset[-1]
                         ):
