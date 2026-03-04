@@ -1,0 +1,71 @@
+(define (problem LIBERO_Floor_Manipulation)
+  (:domain robosuite)
+  (:language Pick the alphabet soup and place it in the basket)
+    (:regions
+      (bin_region
+          (:target floor)
+          (:ranges (
+              (-0.01 0.25 0.01 0.27)
+            )
+          )
+      )
+      (target_object_region
+          (:target floor)
+          (:ranges (
+              ; discrete point 1
+              (-0.165 -0.345 -0.095 -0.275)
+              ; discrete point 2
+              (0.015 -0.345 0.085 -0.275)
+              ; discrete point 3
+              (-0.165 -0.165 -0.095 -0.095)
+              ; discrete point 4
+              (0.015 -0.165 0.085 -0.095)
+              ; discrete point 5
+              (-0.165 0.015 -0.095 0.085)
+              ; discrete point 6
+              (0.015 0.015 0.085 0.085)
+            )
+          )
+      )
+      (workspace_region
+          (:target floor)
+          (:ranges (
+              (-0.165 -0.345 0.085 0.085)
+            )
+          )
+      )
+      (contain_region
+          (:target basket_1)
+      )
+    )
+
+  (:fixtures
+    floor - floor
+    basket_1 - basket
+  )
+
+  (:objects
+    alphabet_soup_1 - alphabet_soup
+    cream_cheese_1 - cream_cheese
+    salad_dressing_1 - salad_dressing
+    milk_1 - milk
+  )
+
+  (:obj_of_interest
+    alphabet_soup_1
+    basket_1
+  )
+
+  (:init
+    (On basket_1 floor_bin_region)
+    (On alphabet_soup_1 floor_target_object_region)
+    (On cream_cheese_1 floor_workspace_region)
+    (On salad_dressing_1 floor_workspace_region)
+    (On milk_1 floor_workspace_region)
+  )
+
+  (:goal
+    (And (In alphabet_soup_1 basket_1_contain_region))
+  )
+
+)
