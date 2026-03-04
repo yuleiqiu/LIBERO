@@ -9,7 +9,7 @@ import torch
 import init_path  # noqa: F401
 import libero.libero.envs.bddl_utils as BDDLUtils
 from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
+from libero.libero.envs.env_wrapper import ControlEnv
 
 
 def sanitize_ranges(raw_ranges):
@@ -58,11 +58,17 @@ def main():
     if not bddl_path.exists():
         raise FileNotFoundError(f"BDDL file not found: {bddl_path}")
 
+    bddl_root = Path(get_libero_path("bddl_files")).expanduser().resolve()
+    try:
+        relative_parent = bddl_path.relative_to(bddl_root).parent
+    except ValueError:
+        relative_parent = Path(bddl_path.parent.name)
+
     out_path = (
         Path(args.out).expanduser().resolve()
         if args.out
         else Path(get_libero_path("init_states"))
-        / bddl_path.parent.name
+        / relative_parent
         / f"{bddl_path.stem}.pruned_init"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,13 +80,17 @@ def main():
 
     env_args = {
         "bddl_file_name": str(bddl_path),
+        "use_camera_obs": False,
+        "has_renderer": False,
+        "has_offscreen_renderer": False,
+        "camera_names": [],
         "camera_heights": 128,
         "camera_widths": 128,
         "region_sampling_strategy": "round_robin",
         "region_sampling_quota": args.per_anchor,
     }
 
-    env = OffScreenRenderEnv(**env_args)
+    env = ControlEnv(**env_args)
     env.seed(args.seed)  # set RNG once; resets will advance the stream
 
     total_needed = args.per_anchor * len(anchor_ranges)

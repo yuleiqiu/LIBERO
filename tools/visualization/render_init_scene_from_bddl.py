@@ -5,6 +5,7 @@ from pathlib import Path
 import cv2
 import imageio.v2 as imageio
 import numpy as np
+import torch
 
 from libero.libero.envs import OffScreenRenderEnv
 
@@ -129,6 +130,44 @@ def overlay_object_position(frame, object_name, position):
     return annotated
 
 
+def resolve_init_states_path(path_str):
+    candidate = Path(path_str).expanduser().resolve()
+    if candidate.is_dir():
+        matches = sorted(
+            p
+            for p in candidate.iterdir()
+            if p.is_file()
+            and (
+                p.suffix in {".pt", ".pth"}
+                or p.name.endswith((".init", ".pruned_init"))
+            )
+        )
+        if not matches:
+            raise FileNotFoundError(
+                f"No init_states file (.init/.pruned_init/.pt/.pth) found under {candidate}"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple init_states files found under {candidate}: {[p.name for p in matches]}"
+            )
+        return matches[0]
+    return candidate
+
+
+def load_init_states(path_str):
+    init_path = resolve_init_states_path(path_str)
+    if not init_path.exists():
+        raise FileNotFoundError(f"Init states file not found: {init_path}")
+    init_states = torch.load(str(init_path), weights_only=False)
+    if torch.is_tensor(init_states):
+        init_states = init_states.cpu().numpy()
+    else:
+        init_states = np.asarray(init_states)
+    if init_states.ndim < 2:
+        raise ValueError(f"Expected stacked init states in {init_path}, got shape {init_states.shape}")
+    return init_path, init_states
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Render multiple initialization images directly from a BDDL file."
@@ -164,6 +203,12 @@ def parse_args():
         default=None,
         help="Output directory. Default: ./tmp/new_scene_overview/<bddl_file_stem>",
     )
+    parser.add_argument(
+        "--init-states-file",
+        type=str,
+        default=None,
+        help="Optional path to an init states file or directory containing one. If set, render these states instead of random resets.",
+    )
     return parser.parse_args()
 
 
@@ -175,11 +220,20 @@ def main():
         raise FileNotFoundError(f"BDDL file not found: {bddl_path}")
     if args.num_images <= 0:
         raise ValueError("--num-images must be positive.")
+    init_states_path = None
+    init_states = None
+    if args.init_states_file:
+        init_states_path, init_states = load_init_states(args.init_states_file)
 
     out_dir = (
         Path(args.out_dir).expanduser().resolve()
         if args.out_dir
-        else Path("./tmp/new_scene_overview") / bddl_path.stem
+        else Path("./tmp/new_scene_overview")
+        / (
+            f"{bddl_path.stem}_{init_states_path.stem}"
+            if init_states_path is not None
+            else bddl_path.stem
+        )
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,8 +255,16 @@ def main():
         None,
     )
 
-    for idx in range(args.num_images):
+    total_images = args.num_images if init_states is None else min(args.num_images, len(init_states))
+    if init_states is not None and args.num_images > len(init_states):
+        print(
+            f"[warning] requested {args.num_images} images but only {len(init_states)} init states available; rendering {total_images}"
+        )
+
+    for idx in range(total_images):
         obs = env.reset()
+        if init_states is not None:
+            obs = env.set_init_state(init_states[idx])
         for _ in range(settle_steps):
             obs, _, _, _ = env.step(action)
         frame = obs[f"{args.camera_name}_image"][::-1].copy()
@@ -222,7 +284,7 @@ def main():
     imageio.imwrite(out_dir / "grid.png", grid)
     env.close()
 
-    print(f"[info] saved {args.num_images} init images to {out_dir}")
+    print(f"[info] saved {total_images} init images to {out_dir}")
     print(f"[info] saved grid image to {out_dir / 'grid.png'}")
 
 
