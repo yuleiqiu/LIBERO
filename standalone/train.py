@@ -29,8 +29,8 @@ from standalone.utils.train_utils import (
     make_episode_split_keys,
     prepare_train_config,
     rollout_sanity_check,
-    sample_per_anchor,
 )
+from standalone.utils.rollout_utils import set_rollout_seed
 
 
 def set_seed(seed: int) -> None:
@@ -450,11 +450,25 @@ def main(cfg: TrainConfig) -> None:
         print(
             f"[info] loaded init states for rollout: {init_states.shape[0]} | anchors {anchor_summary}"
         )
+        rollout_indices = []
+        for anchor_id in sorted(anchor_map.keys()):
+            anchor_state_indices = list(anchor_map[anchor_id])
+            if len(anchor_state_indices) < cfg.rollout.per_anchor:
+                raise ValueError(
+                    f"anchor {anchor_id} has only {len(anchor_state_indices)} states; "
+                    f"need {cfg.rollout.per_anchor}"
+                )
+            rollout_indices.extend(anchor_state_indices[: cfg.rollout.per_anchor])
+        print(
+            f"[info] fixed rollout indices: {len(rollout_indices)} "
+            f"(per_anchor={cfg.rollout.per_anchor})"
+        )
         rollout_state = {
             "init_states": init_states,
             "anchor_map": anchor_map,
             "image_shapes": image_shapes,
             "anchor_indices": anchor_indices,
+            "rollout_indices": rollout_indices,
         }
         from standalone.rollout_env import run_env_rollouts
 
@@ -554,10 +568,8 @@ def main(cfg: TrainConfig) -> None:
         rollout_success = None
         should_save = epoch % save_ckpt_every == 0
         if rollout_runner is not None and epoch % rollout_every == 0:
-            rng = np.random.default_rng(cfg.data.seed + epoch)
-            rollout_indices = sample_per_anchor(
-                rollout_state["anchor_map"], cfg.rollout.per_anchor, rng
-            )
+            set_rollout_seed(int(cfg.data.seed))
+            rollout_indices = rollout_state["rollout_indices"]
             video_dir = save_dir / "rollout_videos" / "val" / f"epoch_{epoch:03d}"
             rollout_cfg = SimpleNamespace(
                 data=cfg.data,

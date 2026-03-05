@@ -2,6 +2,7 @@ from collections import defaultdict, deque
 from dataclasses import is_dataclass
 from pathlib import Path
 import json
+import random
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import h5py
@@ -46,6 +47,16 @@ ROLLOUT_ENV_KWARGS_ALLOWLIST = (
     "renderer",
     "renderer_config",
 )
+
+
+def set_rollout_seed(seed: int) -> None:
+    """Seed Python/NumPy/PyTorch RNGs for reproducible rollout-time policy sampling."""
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _decode_if_bytes(value: Any) -> Any:

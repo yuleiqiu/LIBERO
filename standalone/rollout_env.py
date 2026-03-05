@@ -38,6 +38,7 @@ from standalone.utils.rollout_utils import (
     resolve_rollout_bddl_path,
     resolve_video_dir,
     select_video_camera,
+    set_rollout_seed,
     stack_obs_batch,
     write_rollout_summary,
 )
@@ -334,6 +335,8 @@ def main(cfg: RolloutConfig):
             cfg.video_dir = str(derived_dir)
 
     apply_policy_config(cfg)
+    set_rollout_seed(int(cfg.data.seed))
+    print(f"[info] rollout seed: {int(cfg.data.seed)}")
     if not cfg.data.demo_file:
         raise ValueError("data.demo_file is required")
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
