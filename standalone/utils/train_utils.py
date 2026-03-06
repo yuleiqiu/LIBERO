@@ -31,6 +31,8 @@ RESUME_OVERRIDE_ALLOWLIST = [
     "logging.wandb_project",
     "logging.wandb_entity",
     "logging.experiment_name",
+    "logging.wandb_group",
+    "logging.wandb_tags",
 ]
 
 

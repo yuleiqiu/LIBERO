@@ -67,6 +67,8 @@ class LoggingConfig:
     wandb_project: str = "libero-standalone"
     wandb_entity: Optional[str] = None
     experiment_name: Optional[str] = None
+    wandb_group: Optional[str] = None
+    wandb_tags: Optional[str] = None
 
 
 @dataclass

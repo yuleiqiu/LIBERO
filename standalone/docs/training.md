@@ -98,6 +98,7 @@ Train config fields (grouped):
 - `rollout.use_mp`, `rollout.num_procs`: multiprocessing settings for rollouts.
 - `logging.use_wandb`: enable/disable wandb.
 - `logging.wandb_project`, `logging.wandb_entity`, `logging.experiment_name`: wandb metadata.
+- `logging.wandb_group`, `logging.wandb_tags`: optional wandb grouping/tags (`wandb_tags` accepts comma-separated values).
 
 ## Run directory behavior
 

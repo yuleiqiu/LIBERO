@@ -79,6 +79,23 @@ def _move_optimizer_state_to_device(
                 state[key] = value.to(device=device)
 
 
+def _parse_wandb_tags(raw_tags: object) -> list:
+    """Parse wandb tags from a comma-separated string or iterable."""
+    if raw_tags is None:
+        return []
+    if isinstance(raw_tags, str):
+        return [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
+    if isinstance(raw_tags, (list, tuple)):
+        tags = []
+        for tag in raw_tags:
+            tag_str = str(tag).strip()
+            if tag_str:
+                tags.append(tag_str)
+        return tags
+    tag_str = str(raw_tags).strip()
+    return [tag_str] if tag_str else []
+
+
 @draccus.wrap()
 def main(cfg: TrainConfig) -> None:
     cfg, save_dir, _ = prepare_train_config(cfg)
@@ -105,6 +122,11 @@ def main(cfg: TrainConfig) -> None:
             entity=cfg.logging.wandb_entity or None,
             config=wandb_config,
         )
+        if cfg.logging.wandb_group:
+            wandb_init_kwargs["group"] = cfg.logging.wandb_group
+        wandb_tags = _parse_wandb_tags(getattr(cfg.logging, "wandb_tags", None))
+        if wandb_tags:
+            wandb_init_kwargs["tags"] = wandb_tags
         if cfg.resume and wandb_run_id_path.exists():
             with open(wandb_run_id_path, "r") as f:
                 run_id = f.read().strip()
