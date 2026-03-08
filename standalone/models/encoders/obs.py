@@ -86,7 +86,7 @@ class ObsEncoder(nn.Module):
         return value
 
     def _get_mask(self, obs, image_key):
-        """Return mask tensor (B, 1, H, W) for the given image key, or None."""
+        """Return a binary object-of-interest mask tensor (B, 1, H, W), or None."""
         mask_key = self.image_mask_map.get(image_key)
         if not mask_key or mask_key not in obs:
             return None
@@ -95,6 +95,9 @@ class ObsEncoder(nn.Module):
             m = torch.as_tensor(m)
         if m.ndim == 3:  # (B, H, W) -> (B, 1, H, W)
             m = m.unsqueeze(1)
+        # Current segmentation training only highlights object_of_interest.
+        # Treat both 0 and -1 as irrelevant regions and keep a binary 0/1 mask.
+        m = (m > 0).to(dtype=torch.float32)
         return m
 
     def _encode_image(self, encoder, x, mask):

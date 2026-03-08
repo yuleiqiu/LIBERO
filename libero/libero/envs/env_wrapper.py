@@ -229,13 +229,12 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
 
     def get_segmentation_of_interest(self, segmentation_image):
         # get the combined segmentation of obj of interest
-        # 1 for obj_of_interest
-        # -1.0 for robot
-        # 0 for other things
+        # 1.0 for obj_of_interest
+        # 0.0 for other mapped instances (including robot / non-target objects)
+        # -1.0 for background or unmapped pixels (raw segmentation id 0)
         ret_seg = np.zeros_like(segmentation_image)
         for obj in self.obj_of_interest:
             ret_seg[segmentation_image == self.instance_to_id[obj]] = 1.0
-        # ret_seg[segmentation_image == self.segmentation_robot_id+1] = -1.0
         ret_seg[segmentation_image == 0] = -1.0
         return ret_seg
 

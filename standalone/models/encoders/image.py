@@ -245,6 +245,8 @@ class DPImageEncoder(nn.Module):
                 )
         h = self.backbone(x)
         if mask is not None:
+            if torch.any((mask < 0) | (mask > 1)):
+                raise ValueError("DPImageEncoder expects a binary mask with values in [0, 1]")
             mask_low = F.interpolate(mask.float(), size=h.shape[-2:], mode="nearest")
             h = h * (self.mask_alpha + (1.0 - self.mask_alpha) * mask_low)
         h = torch.flatten(self.pool(h), start_dim=1)

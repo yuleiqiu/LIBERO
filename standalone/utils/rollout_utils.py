@@ -237,6 +237,7 @@ def infer_rollout_io_specs(
     obs_keys: Sequence[str],
     image_keys: Sequence[str],
     obs_horizon: int,
+    extra_obs_keys: Optional[Sequence[str]] = None,
     action_key: str = "actions",
 ) -> Tuple[int, Dict[str, Tuple[int, ...]], Dict[str, Tuple[int, ...]], int]:
     """Infer rollout model IO specs from HDF5 without building dataset indices."""
@@ -251,7 +252,7 @@ def infer_rollout_io_specs(
     if obs_horizon <= 0:
         raise ValueError("obs_horizon must be >= 1")
 
-    required = list(obs_keys) + list(image_keys)
+    required = list(obs_keys) + list(image_keys) + list(extra_obs_keys or [])
     with h5py.File(hdf5_path, "r") as f:
         data = f["data"]
         demo_keys = [k for k in data.keys() if k.startswith("demo_")]
@@ -347,6 +348,27 @@ def build_obs_key_mapping(
         mapping.update(cfg.data.obs_key_mapping)
     return {key: mapping.get(key, key) for key in obs_keys + image_keys}
 
+
+def parse_mask_keys(mask_keys_raw: str, image_keys: Sequence[str]) -> List[str]:
+    """Parse cfg.data.mask_keys into a list aligned with image_keys."""
+    mask_keys = [k.strip() for k in str(mask_keys_raw or "").split(",")]
+    while len(mask_keys) < len(image_keys):
+        mask_keys.append("")
+    return mask_keys[: len(image_keys)]
+
+
+def active_mask_keys(mask_keys: Sequence[str]) -> List[str]:
+    """Return active non-empty mask keys."""
+    return [key for key in mask_keys if key]
+
+
+def image_mask_items(
+    image_keys: Sequence[str], mask_keys: Sequence[str]
+) -> List[Tuple[str, str]]:
+    """Return ordered `(image_key, mask_key)` pairs for active masks."""
+    return [(img_key, mask_key) for img_key, mask_key in zip(image_keys, mask_keys) if mask_key]
+
+
 def infer_camera_size(image_shapes: Mapping[str, Sequence[int]]) -> Optional[Tuple[int, int]]:
     """Infer camera resolution (H, W) from image shapes."""
     if not image_shapes:
@@ -383,11 +405,55 @@ def camera_names_from_mapping(
     return names
 
 
+def segmentation_key(env_key: str) -> str:
+    """Map an env image observation key to its instance-segmentation key."""
+    if env_key.endswith("_image"):
+        return f"{env_key[: -len('_image')]}_segmentation_instance"
+    return f"{env_key}_segmentation_instance"
+
+
+def build_mask_obs_batch(
+    env_obs_list: Sequence[Mapping[str, Any]],
+    env: Any,
+    image_keys: Sequence[str],
+    mask_keys: Sequence[str],
+    obs_key_mapping: Mapping[str, str],
+) -> List[Dict[str, np.ndarray]]:
+    """Generate binary object-of-interest masks for each env observation."""
+    mask_pairs = image_mask_items(image_keys, mask_keys)
+    out: List[Dict[str, np.ndarray]] = [dict() for _ in env_obs_list]
+    if not mask_pairs:
+        return out
+    if not hasattr(env, "get_segmentation_of_interest"):
+        raise ValueError("active mask_keys require an env with get_segmentation_of_interest()")
+
+    batched = len(env_obs_list) > 1
+    for image_key, mask_key in mask_pairs:
+        env_key = obs_key_mapping.get(image_key, image_key)
+        seg_key = segmentation_key(env_key)
+        seg_imgs: List[np.ndarray] = []
+        for obs in env_obs_list:
+            if seg_key not in obs:
+                raise KeyError(
+                    f"env obs missing segmentation key {seg_key} for image key {image_key}; "
+                    f"available keys: {list(obs.keys())}"
+                )
+            seg_imgs.append(np.squeeze(np.asarray(obs[seg_key])))
+        if batched:
+            seg_masks = env.get_segmentation_of_interest(seg_imgs)
+        else:
+            seg_masks = [env.get_segmentation_of_interest(seg_imgs[0])]
+        for idx, seg_mask in enumerate(seg_masks):
+            out[idx][mask_key] = (np.squeeze(np.asarray(seg_mask)) == 1).astype(np.float32)
+    return out
+
+
 def extract_env_obs(
     env_obs: Mapping[str, Any],
     obs_keys: Sequence[str],
     image_keys: Sequence[str],
     obs_key_mapping: Mapping[str, str],
+    extra_obs: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Select required keys from env obs and remap names."""
     out: Dict[str, Any] = {}
@@ -398,6 +464,8 @@ def extract_env_obs(
                 f"env obs missing key {env_key} (for {key}); available keys: {list(env_obs.keys())}"
             )
         out[key] = env_obs[env_key]
+    if extra_obs:
+        out.update(extra_obs)
     return out
 
 
@@ -420,12 +488,13 @@ def stack_obs_batch(
     obs_list: Sequence[Mapping[str, Any]],
     obs_keys: Sequence[str],
     image_keys: Sequence[str],
+    extra_keys: Optional[Sequence[str]] = None,
 ) -> Dict[str, np.ndarray]:
     """Stack multiple obs into a batch (first dimension)."""
     if not obs_list:
         raise ValueError("cannot stack empty observation list")
     batch: Dict[str, np.ndarray] = {}
-    for key in obs_keys + image_keys:
+    for key in list(obs_keys) + list(image_keys) + list(extra_keys or []):
         batch[key] = np.stack([obs[key] for obs in obs_list], axis=0)
     return batch
 
@@ -451,11 +520,17 @@ def seed_rollout_env(env: Any, seed: int, env_num: int) -> None:
         env.seed([int(seed)] * env_num)
 
 
-def build_histories(cfg: Any, obs_keys: Sequence[str], image_keys: Sequence[str], env_num: int):
+def build_histories(
+    cfg: Any,
+    obs_keys: Sequence[str],
+    image_keys: Sequence[str],
+    env_num: int,
+    extra_keys: Optional[Sequence[str]] = None,
+):
     """Create one observation history buffer per active env slot."""
     return [
         ObsHistory(
-            obs_keys + image_keys,
+            list(obs_keys) + list(image_keys) + list(extra_keys or []),
             cfg.data.obs_horizon,
             image_keys=image_keys,
             image_norm=cfg.data.image_norm,

@@ -9,15 +9,17 @@ try:
 except ImportError as exc:
     raise ImportError("draccus is required; install with `pip install draccus`.") from exc
 
-from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
+from libero.libero.envs import OffScreenRenderEnv, SegmentationRenderEnv, SubprocVectorEnv
 from libero.libero.utils.video_utils import VideoWriter
 
 from standalone.configs import RolloutConfig, apply_policy_config
 from standalone.utils.rollout_utils import (
     _derive_eval_video_dir,
     _ensure_video_camera,
+    active_mask_keys,
     apply_ckpt_config,
     build_histories,
+    build_mask_obs_batch,
     build_per_env_temporal_ensemblers,
     build_obs_key_mapping,
     build_rollout_summary,
@@ -27,6 +29,7 @@ from standalone.utils.rollout_utils import (
     infer_rollout_io_specs,
     load_anchor_indices,
     pending_env_indices,
+    parse_mask_keys,
     pop_actions,
     read_env_kwargs_from_hdf5,
     refill_action_queues,
@@ -53,6 +56,7 @@ def run_env_rollouts(
     model,
     obs_keys,
     image_keys,
+    mask_keys,
     demo_path,
     action_dim,
     image_shapes,
@@ -61,6 +65,7 @@ def run_env_rollouts(
     anchor_ids=None,
 ):
     bddl_path, _, _ = resolve_rollout_bddl_path(cfg, demo_path)
+    active_masks = active_mask_keys(mask_keys)
 
     if init_states_override is None:
         init_states = load_init_states(cfg, demo_path)
@@ -102,7 +107,11 @@ def run_env_rollouts(
                 "camera_widths": camera_w,
             }
         )
+        if active_masks:
+            env_args["camera_segmentations"] = "instance"
     else:
+        if active_masks:
+            raise ValueError("mask_keys require image_keys during env rollout")
         env_args["use_camera_obs"] = False
 
     video_dir = resolve_video_dir(cfg)
@@ -167,12 +176,13 @@ def run_env_rollouts(
     if max_steps <= 0:
         raise ValueError("steps must be >= 1")
 
+    env_cls = SegmentationRenderEnv if active_masks else OffScreenRenderEnv
     if env_num == 1:
-        env = OffScreenRenderEnv(**env_args)
+        env = env_cls(**env_args)
     else:
-        env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
+        env = SubprocVectorEnv([lambda: env_cls(**env_args) for _ in range(env_num)])
     seed_rollout_env(env, int(cfg.data.seed), env_num)
-    histories = build_histories(cfg, obs_keys, image_keys, env_num)
+    histories = build_histories(cfg, obs_keys, image_keys, env_num, extra_keys=active_masks)
 
     episode_results = []
     max_record_videos = min(save_videos, n_rollouts)
@@ -207,15 +217,31 @@ def run_env_rollouts(
                 record_active[i] = True
                 video_ids[i] = episodes_done + i
 
+        mask_obs_list = build_mask_obs_batch(env_obs_list, env, image_keys, mask_keys, obs_key_mapping)
         for i in range(env_num):
-            obs = extract_env_obs(env_obs_list[i], obs_keys, image_keys, obs_key_mapping)
+            obs = extract_env_obs(
+                env_obs_list[i],
+                obs_keys,
+                image_keys,
+                obs_key_mapping,
+                extra_obs=mask_obs_list[i],
+            )
             histories[i].add(obs)
 
         dummy = np.zeros((env_num, action_dim), dtype=np.float32)
         for _ in range(int(cfg.warmup_steps)):
             env_obs_list, _ = step_env_batch(env, dummy, env_num)
+            mask_obs_list = build_mask_obs_batch(
+                env_obs_list, env, image_keys, mask_keys, obs_key_mapping
+            )
             for i in range(env_num):
-                obs = extract_env_obs(env_obs_list[i], obs_keys, image_keys, obs_key_mapping)
+                obs = extract_env_obs(
+                    env_obs_list[i],
+                    obs_keys,
+                    image_keys,
+                    obs_key_mapping,
+                    extra_obs=mask_obs_list[i],
+                )
                 histories[i].add(obs)
 
         action_queues = [deque() for _ in range(env_num)]
@@ -232,7 +258,7 @@ def run_env_rollouts(
             )
             if pending:
                 obs_list = [histories[i].stack() for i in pending]
-                obs_batch = stack_obs_batch(obs_list, obs_keys, image_keys)
+                obs_batch = stack_obs_batch(obs_list, obs_keys, image_keys, extra_keys=active_masks)
                 refill_action_queues(
                     model,
                     obs_batch,
@@ -262,8 +288,17 @@ def run_env_rollouts(
                         if bool(done_array[i]):
                             record_active[i] = False
 
+            mask_obs_list = build_mask_obs_batch(
+                env_obs_list, env, image_keys, mask_keys, obs_key_mapping
+            )
             for i in range(env_num):
-                obs = extract_env_obs(env_obs_list[i], obs_keys, image_keys, obs_key_mapping)
+                obs = extract_env_obs(
+                    env_obs_list[i],
+                    obs_keys,
+                    image_keys,
+                    obs_key_mapping,
+                    extra_obs=mask_obs_list[i],
+                )
                 histories[i].add(obs)
 
             if all(dones[:remaining]) and (not video_writer or not any(record_active[:remaining])):
@@ -341,6 +376,8 @@ def main(cfg: RolloutConfig):
         raise ValueError("data.demo_file is required")
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
+    mask_keys = parse_mask_keys(getattr(cfg.data, "mask_keys", ""), image_keys)
+    active_masks = active_mask_keys(mask_keys)
     policy_name = get_policy_name(cfg)
 
     demo_path = Path(cfg.data.demo_file).expanduser().resolve()
@@ -354,6 +391,7 @@ def main(cfg: RolloutConfig):
         obs_keys=obs_keys,
         image_keys=image_keys,
         obs_horizon=cfg.data.obs_horizon,
+        extra_obs_keys=active_masks,
     )
     print(f"[debug] action_dim: {action_dim}")
 
@@ -366,6 +404,7 @@ def main(cfg: RolloutConfig):
         action_dim,
         proprio_dim=proprio_dim,
         obs_shapes=obs_shapes,
+        mask_keys=mask_keys if active_masks else None,
     )
 
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
@@ -394,6 +433,7 @@ def main(cfg: RolloutConfig):
         model,
         obs_keys,
         image_keys,
+        mask_keys,
         demo_path,
         action_dim,
         image_shapes,
