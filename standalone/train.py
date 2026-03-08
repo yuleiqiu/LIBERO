@@ -393,7 +393,8 @@ def main(cfg: TrainConfig) -> None:
         model.set_normalizer(dp_normalizer)
     model.to(device)
     optimizer = build_optimizer(cfg, model, policy_name)
-    total_steps = int(cfg.training.epochs) * max(len(train_loader), 1)
+    steps_per_epoch = len(train_loader)
+    total_steps = int(cfg.training.epochs) * max(steps_per_epoch, 1)
     scheduler = build_scheduler(cfg, optimizer, policy_name, total_steps)
 
     last_ckpt_path = save_dir / "model_last.pt"
@@ -560,7 +561,7 @@ def main(cfg: TrainConfig) -> None:
                 train_stat_count += 1
 
         avg_train = sum(train_losses) / max(len(train_losses), 1)
-        print(f"[info] epoch {epoch:03d} | train loss {avg_train:.6f}")
+        global_step = epoch * steps_per_epoch
         avg_train_stats = (
             {k: v / train_stat_count for k, v in train_stats.items()}
             if train_stat_count
@@ -586,7 +587,15 @@ def main(cfg: TrainConfig) -> None:
                     loss = model.compute_loss(batch)
                     val_losses.append(loss.item())
             avg_val = sum(val_losses) / max(len(val_losses), 1)
-            print(f"[info] epoch {epoch:03d} | val loss {avg_val:.6f}")
+        epoch_summary = [
+            f"[info] epoch {epoch}/{cfg.training.epochs}",
+            f"steps this epoch: {steps_per_epoch}",
+            f"global step: {global_step}/{total_steps}",
+            f"train loss {avg_train:.6f}",
+        ]
+        if avg_val is not None:
+            epoch_summary.append(f"val loss {avg_val:.6f}")
+        print(" | ".join(epoch_summary))
         rollout_success = None
         should_save = epoch % save_ckpt_every == 0
         if rollout_runner is not None and epoch % rollout_every == 0:
@@ -624,17 +633,25 @@ def main(cfg: TrainConfig) -> None:
                 rollout_success = rollout_details.get("success_rate")
             if wandb is not None and rollout_details is not None:
                 wandb.log(
-                    {"rollout/success_rate": rollout_details.get("success_rate")},
-                    step=epoch,
+                    {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "rollout/success_rate": rollout_details.get("success_rate"),
+                    },
+                    step=global_step,
                 )
 
         if wandb is not None:
-            log_data = {"epoch": epoch, "train/loss": avg_train}
+            log_data = {
+                "epoch": epoch,
+                "global_step": global_step,
+                "train/loss": avg_train,
+            }
             for key, value in avg_train_stats.items():
                 log_data[f"train/{key}"] = value
             if avg_val is not None:
                 log_data["val/loss"] = avg_val
-            wandb.log(log_data, step=epoch)
+            wandb.log(log_data, step=global_step)
 
         if should_save:
             ckpt_payload = {
