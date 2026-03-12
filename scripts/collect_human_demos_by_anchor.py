@@ -117,7 +117,7 @@ def collect_human_trajectory(env, device, arm, env_configuration):
             task_completion_hold_count = -1
 
     print(count)
-    return saving
+    return saving, count
 
 
 def unwrap_reset_obs(obs):
@@ -166,6 +166,18 @@ def ensure_hdf5_group(f, env_info, args, env_name):
     return grp
 
 
+def flush_current_episode(env):
+    """Flush the current episode to disk without closing the reusable wrapper."""
+    if not getattr(env, "has_interaction", False):
+        return False
+    if getattr(env, "ep_directory", None) is None:
+        return False
+
+    env._flush()
+    env.has_interaction = False
+    return True
+
+
 def append_demo_to_hdf5(directory, ep_directory, out_dir, env_info, args, anchor_idx=None):
     state_paths = os.path.join(directory, ep_directory, "state_*.npz")
     states = []
@@ -181,7 +193,7 @@ def append_demo_to_hdf5(directory, ep_directory, out_dir, env_info, args, anchor
             actions.append(ai["actions"])
 
     if len(states) == 0:
-        return False
+        return False, 0
 
     del states[-1]
     assert len(states) == len(actions)
@@ -200,7 +212,7 @@ def append_demo_to_hdf5(directory, ep_directory, out_dir, env_info, args, anchor
         ep_data_grp.create_dataset("actions", data=np.array(actions))
         if anchor_idx is not None:
             ep_data_grp.attrs["anchor_idx"] = int(anchor_idx)
-    return True
+    return True, len(actions)
 
 
 def load_anchor_counts(hdf5_path, num_anchors):
@@ -348,54 +360,63 @@ if __name__ == "__main__":
     else:
         collected = 0
 
-    while collected < total_needed:
-        reset_success = False
-        obs = None
-        while not reset_success:
-            try:
-                obs = unwrap_reset_obs(env.reset())
-                reset_success = True
-            except Exception:
+    try:
+        while collected < total_needed:
+            reset_success = False
+            obs = None
+            while not reset_success:
+                try:
+                    obs = unwrap_reset_obs(env.reset())
+                    reset_success = True
+                except Exception:
+                    continue
+
+            if obs is None:
                 continue
 
-        if obs is None:
-            env.close()
-            continue
+            anchor_idx = get_anchor_idx(env, obs, anchor_ranges, args.tolerance)
 
-        anchor_idx = get_anchor_idx(env, obs, anchor_ranges, args.tolerance)
+            if anchor_idx is None:
+                continue
 
-        if anchor_idx is None:
-            env.close()
-            continue
+            if anchor_counts[anchor_idx] >= args.per_anchor:
+                continue
 
-        if anchor_counts[anchor_idx] >= args.per_anchor:
-            env.close()
-            continue
+            saving, count = collect_human_trajectory(env, device, args.arm, args.config)
+            ep_dir = getattr(env, "ep_directory", None)
+            if ep_dir:
+                ep_dir = os.path.basename(ep_dir)
+            if not saving:
+                continue
+            if not ep_dir:
+                print("[warning] ep_directory not set after interaction; skipping episode")
+                continue
 
-        saving = collect_human_trajectory(env, device, args.arm, args.config)
-        ep_dir = getattr(env, "ep_directory", None)
-        if ep_dir:
-            ep_dir = os.path.basename(ep_dir)
-        if not saving:
-            env.close()
-            continue
-        if not ep_dir:
-            print("[warning] ep_directory not set after interaction; skipping episode")
-            env.close()
-            continue
+            if not flush_current_episode(env):
+                print("[warning] failed to flush episode data; skipping")
+                continue
 
-        if not append_demo_to_hdf5(
-            tmp_directory, ep_dir, new_dir, env_info, args, anchor_idx
-        ):
-            print("[warning] failed to write episode data; skipping")
-            env.close()
-            continue
-        anchor_counts[anchor_idx] += 1
-        collected += 1
-        print(
-            f"Collected demo {collected}/{total_needed} "
-            f"(anchor {anchor_idx + 1}, count {anchor_counts[anchor_idx]})"
-        )
+            written, written_steps = append_demo_to_hdf5(
+                tmp_directory, ep_dir, new_dir, env_info, args, anchor_idx
+            )
+            if not written:
+                print("[warning] failed to write episode data; skipping")
+                continue
+
+            if written_steps != count:
+                print(
+                    f"[warning] recorded step mismatch for {ep_dir}: "
+                    f"teleop_count={count}, written_steps={written_steps}"
+                )
+
+            anchor_counts[anchor_idx] += 1
+            collected += 1
+            print(
+                f"Collected demo {collected}/{total_needed} "
+                f"(anchor {anchor_idx + 1}, count {anchor_counts[anchor_idx]}, "
+                f"steps={written_steps})"
+            )
+    finally:
         env.close()
 
     print("Per-anchor human data collection completed.")
