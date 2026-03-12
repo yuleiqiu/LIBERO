@@ -22,6 +22,14 @@ from standalone.dataset_utils.normalizer_utils import (
     compute_linear_stats,
 )
 from standalone.models.policy.policy_factory import build_policy, get_policy_name
+from standalone.utils.model_spec_utils import (
+    build_model_spec,
+    write_model_spec_to_run_config,
+)
+from standalone.utils.rollout_spec_utils import (
+    build_rollout_spec,
+    write_rollout_spec_to_run_config,
+)
 from standalone.utils.train_utils import (
     build_scheduler,
     build_optimizer,
@@ -185,6 +193,12 @@ def main(cfg: TrainConfig) -> None:
             raise ValueError(
                 "training.save_topk requires save_ckpt_every to be a multiple of rollout.every"
             )
+    rollout_spec = None
+    try:
+        rollout_spec = build_rollout_spec(cfg, demo_path)
+        write_rollout_spec_to_run_config(save_dir, rollout_spec)
+    except Exception as exc:
+        print(f"[warning] failed to persist rollout_spec: {exc}")
 
     dp_action_horizon = None
     dp_action_start_offset = None
@@ -336,8 +350,21 @@ def main(cfg: TrainConfig) -> None:
         obs_shapes[key] = value.shape
         if key in image_keys:
             image_shapes[key] = value.shape[1:]
+    model_spec = build_model_spec(
+        action_dim=action_dim,
+        proprio_dim=proprio_dim,
+        obs_shapes=obs_shapes,
+        image_shapes=image_shapes,
+        obs_keys=obs_keys,
+        image_keys=image_keys,
+        mask_keys=mask_keys,
+    )
+    write_model_spec_to_run_config(save_dir, model_spec)
     dp_normalizer = None
     ckpt_extra = {}
+    ckpt_extra["model_spec"] = model_spec
+    if rollout_spec is not None:
+        ckpt_extra["rollout_spec"] = rollout_spec
     if policy_name == "dp":
         normalizer_cfg = cfg.policy.dp.normalizer
         identity_normalizer = build_identity_normalizer(

@@ -42,7 +42,7 @@ def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
         return data.attrs.get("bddl_file_name", None)
 
 
-def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optional[str]:
+def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Optional[Path]) -> Optional[str]:
     """Resolve a BDDL path from absolute, repo-relative, or demo-relative locations."""
     if not bddl_file_name:
         return None
@@ -59,7 +59,8 @@ def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optiona
         if repo_candidate.exists():
             return str(repo_candidate)
 
-    demo_candidate = (demo_path.parent / candidate).resolve()
-    if demo_candidate.exists():
-        return str(demo_candidate)
+    if demo_path is not None:
+        demo_candidate = (demo_path.parent / candidate).resolve()
+        if demo_candidate.exists():
+            return str(demo_candidate)
     return None

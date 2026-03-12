@@ -1,5 +1,6 @@
 from collections import deque
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -45,6 +46,12 @@ from standalone.utils.rollout_utils import (
     stack_obs_batch,
     write_rollout_summary,
 )
+from standalone.utils.model_spec_utils import load_model_spec, unpack_model_spec
+from standalone.utils.rollout_spec_utils import (
+    apply_rollout_spec_overrides,
+    get_rollout_env_kwargs,
+    load_rollout_spec,
+)
 from standalone.utils.train_utils import TRAIN_CONFIG_NAME, load_config_json
 from standalone.dataset_utils.normalizer_utils import build_identity_normalizer
 from standalone.models.algos.dp.utils.normalizer import LinearNormalizer
@@ -57,9 +64,10 @@ def run_env_rollouts(
     obs_keys,
     image_keys,
     mask_keys,
-    demo_path,
+    demo_path: Optional[Path],
     action_dim,
     image_shapes,
+    env_kwargs_override=None,
     init_states_override=None,
     rollout_order_override=None,
     anchor_ids=None,
@@ -77,13 +85,20 @@ def run_env_rollouts(
     cam_hw = infer_camera_size(image_shapes) if image_keys else None
 
     env_args = {"bddl_file_name": str(bddl_path)}
-    dataset_env_kwargs = read_env_kwargs_from_hdf5(str(demo_path))
-    if dataset_env_kwargs:
-        env_args.update(dataset_env_kwargs)
+    if env_kwargs_override:
+        env_args.update(dict(env_kwargs_override))
         print(
-            "[info] rollout env kwargs from dataset:",
-            ", ".join(sorted(dataset_env_kwargs.keys())),
+            "[info] rollout env kwargs from rollout_spec:",
+            ", ".join(sorted(env_kwargs_override.keys())),
         )
+    elif demo_path is not None:
+        dataset_env_kwargs = read_env_kwargs_from_hdf5(str(demo_path))
+        if dataset_env_kwargs:
+            env_args.update(dataset_env_kwargs)
+            print(
+                "[info] rollout env kwargs from dataset:",
+                ", ".join(sorted(dataset_env_kwargs.keys())),
+            )
     env_horizon = getattr(cfg, "env_horizon", None)
     if env_horizon is not None:
         env_horizon = int(env_horizon)
@@ -364,6 +379,9 @@ def main(cfg: RolloutConfig):
         run_config = ckpt["config"]
     if run_config is not None and apply_ckpt_config(cfg, run_config):
         print("[info] using config from checkpoint")
+    rollout_spec = load_rollout_spec(ckpt=ckpt, run_config=run_config)
+    if apply_rollout_spec_overrides(cfg, rollout_spec):
+        print("[info] using rollout_spec from checkpoint metadata")
     if not getattr(cfg, "video_dir", ""):
         derived_dir = _derive_eval_video_dir(cfg, run_config)
         if derived_dir is not None:
@@ -372,28 +390,50 @@ def main(cfg: RolloutConfig):
     apply_policy_config(cfg)
     set_rollout_seed(int(cfg.data.seed))
     print(f"[info] rollout seed: {int(cfg.data.seed)}")
-    if not cfg.data.demo_file:
-        raise ValueError("data.demo_file is required")
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
     mask_keys = parse_mask_keys(getattr(cfg.data, "mask_keys", ""), image_keys)
     active_masks = active_mask_keys(mask_keys)
     policy_name = get_policy_name(cfg)
 
-    demo_path = Path(cfg.data.demo_file).expanduser().resolve()
-    if not demo_path.exists():
-        raise FileNotFoundError(f"HDF5 not found: {demo_path}")
-
     device = cfg.device if torch.cuda.is_available() else "cpu"
-
-    action_dim, image_shapes, obs_shapes, proprio_dim = infer_rollout_io_specs(
-        hdf5_path=str(demo_path),
-        obs_keys=obs_keys,
-        image_keys=image_keys,
-        obs_horizon=cfg.data.obs_horizon,
-        extra_obs_keys=active_masks,
+    explicit_env_override = bool(getattr(cfg, "bddl_file", None)) and bool(
+        getattr(cfg, "init_states", None)
     )
-    print(f"[debug] action_dim: {action_dim}")
+    demo_path = None
+    raw_demo_file = str(getattr(cfg.data, "demo_file", "") or "").strip()
+    if raw_demo_file:
+        candidate = Path(raw_demo_file).expanduser().resolve()
+        if candidate.exists():
+            demo_path = candidate
+        elif not explicit_env_override:
+            raise FileNotFoundError(f"HDF5 not found: {candidate}")
+        else:
+            print(
+                "[warning] data.demo_file does not exist; ignoring it because "
+                "bddl_file and init_states were provided explicitly"
+            )
+    model_spec = load_model_spec(ckpt=ckpt, run_config=run_config)
+    if model_spec is not None:
+        action_dim, image_shapes, obs_shapes, proprio_dim = unpack_model_spec(model_spec)
+        print("[info] using model_spec from checkpoint metadata")
+    else:
+        if demo_path is None:
+            raise ValueError(
+                "data.demo_file is required when checkpoint metadata lacks model_spec"
+            )
+        action_dim, image_shapes, obs_shapes, proprio_dim = infer_rollout_io_specs(
+            hdf5_path=str(demo_path),
+            obs_keys=obs_keys,
+            image_keys=image_keys,
+            obs_horizon=cfg.data.obs_horizon,
+            extra_obs_keys=active_masks,
+        )
+        print(f"[debug] action_dim: {action_dim}")
+    if demo_path is None and not explicit_env_override:
+        raise ValueError(
+            "data.demo_file is required unless both bddl_file and init_states are provided"
+        )
 
     if policy_name not in ("act", "dp"):
         raise ValueError(f"unsupported policy: {policy_name}")
@@ -428,6 +468,7 @@ def main(cfg: RolloutConfig):
     model.reset()
 
     anchor_ids = load_anchor_indices(cfg)
+    rollout_env_kwargs = {} if explicit_env_override else get_rollout_env_kwargs(rollout_spec)
     run_env_rollouts(
         cfg,
         model,
@@ -437,6 +478,7 @@ def main(cfg: RolloutConfig):
         demo_path,
         action_dim,
         image_shapes,
+        env_kwargs_override=rollout_env_kwargs,
         anchor_ids=anchor_ids,
     )
 

@@ -137,12 +137,12 @@ def read_bddl_from_hdf5(hdf5_path: str) -> Optional[str]:
     return _read_bddl_from_hdf5(hdf5_path)
 
 
-def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Path) -> Optional[str]:
+def resolve_bddl_path(bddl_file_name: Optional[str], demo_path: Optional[Path]) -> Optional[str]:
     """Resolve a BDDL path from absolute, repo-relative, or demo-relative locations."""
     return _resolve_bddl_path(bddl_file_name, demo_path)
 
 
-def resolve_rollout_bddl_path(cfg: Any, demo_path: Path) -> Tuple[Path, Optional[str], str]:
+def resolve_rollout_bddl_path(cfg: Any, demo_path: Optional[Path]) -> Tuple[Path, Optional[str], str]:
     """Resolve rollout BDDL from explicit override or HDF5 metadata."""
     bddl_override = getattr(cfg, "bddl_file", None)
     if bddl_override:
@@ -151,6 +151,8 @@ def resolve_rollout_bddl_path(cfg: Any, demo_path: Path) -> Tuple[Path, Optional
             raise FileNotFoundError(f"bddl_file override not found: {bddl_override}")
         return Path(bddl_path), canonicalize_bddl_file_name(bddl_override), "cfg.bddl_file"
 
+    if demo_path is None:
+        raise ValueError("demo_path is required when bddl_file is not provided")
     bddl_file_name = read_bddl_from_hdf5(str(demo_path))
     if bddl_file_name is None:
         raise ValueError("bddl_file_name not found in hdf5; cannot create env")
@@ -290,7 +292,7 @@ def infer_rollout_io_specs(
     return action_dim, image_shapes, obs_shapes, proprio_dim
 
 
-def load_init_states(cfg: Any, demo_path: Path) -> np.ndarray:
+def load_init_states(cfg: Any, demo_path: Optional[Path]) -> np.ndarray:
     """Load init states from cfg.init_states or fall back to HDF5."""
     init_states_path = getattr(cfg, "init_states", None)
     if init_states_path:
@@ -304,6 +306,8 @@ def load_init_states(cfg: Any, demo_path: Path) -> np.ndarray:
             init_states = np.asarray(init_states)
         print(f"[info] loaded {init_states.shape[0]} init states from {init_states_path}")
         return init_states
+    if demo_path is None:
+        raise ValueError("demo_path is required when init_states is not provided")
     return read_init_states_from_hdf5(str(demo_path))
 
 
