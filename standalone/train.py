@@ -1,4 +1,5 @@
 import json
+import os
 import random
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -104,6 +105,17 @@ def _parse_wandb_tags(raw_tags: object) -> list:
     return [tag_str] if tag_str else []
 
 
+def _resolve_demo_paths(cfg: TrainConfig) -> tuple[Path, Path]:
+    stable_demo_path = Path(cfg.data.demo_file).expanduser().resolve()
+    runtime_demo_raw = str(os.environ.get("LIBERO_RUNTIME_DEMO_FILE", "")).strip()
+    runtime_demo_path = (
+        Path(runtime_demo_raw).expanduser().resolve()
+        if runtime_demo_raw
+        else stable_demo_path
+    )
+    return stable_demo_path, runtime_demo_path
+
+
 @draccus.wrap()
 def main(cfg: TrainConfig) -> None:
     cfg, save_dir, _ = prepare_train_config(cfg)
@@ -149,9 +161,16 @@ def main(cfg: TrainConfig) -> None:
         if cfg.logging.experiment_name:
             wandb.run.name = cfg.logging.experiment_name
 
-    demo_path = Path(cfg.data.demo_file).expanduser().resolve()
+    stable_demo_path, demo_path = _resolve_demo_paths(cfg)
+    if not stable_demo_path.exists():
+        raise FileNotFoundError(f"HDF5 not found: {stable_demo_path}")
     if not demo_path.exists():
-        raise FileNotFoundError(f"HDF5 not found: {demo_path}")
+        raise FileNotFoundError(f"Runtime HDF5 not found: {demo_path}")
+    if demo_path != stable_demo_path:
+        print(
+            "[info] using runtime demo override: "
+            f"{demo_path} (config keeps {stable_demo_path})"
+        )
 
     obs_keys = [k.strip() for k in cfg.data.obs_keys.split(",") if k.strip()]
     image_keys = [k.strip() for k in cfg.data.image_keys.split(",") if k.strip()]
@@ -195,7 +214,7 @@ def main(cfg: TrainConfig) -> None:
             )
     rollout_spec = None
     try:
-        rollout_spec = build_rollout_spec(cfg, demo_path)
+        rollout_spec = build_rollout_spec(cfg, stable_demo_path)
         write_rollout_spec_to_run_config(save_dir, rollout_spec)
     except Exception as exc:
         print(f"[warning] failed to persist rollout_spec: {exc}")
