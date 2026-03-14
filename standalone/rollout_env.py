@@ -1,6 +1,6 @@
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -63,7 +63,7 @@ def run_env_rollouts(
     model,
     obs_keys,
     image_keys,
-    mask_keys,
+    mask_keys: Optional[Sequence[str]],
     demo_path: Optional[Path],
     action_dim,
     image_shapes,
@@ -73,6 +73,10 @@ def run_env_rollouts(
     anchor_ids=None,
 ):
     bddl_path, _, _ = resolve_rollout_bddl_path(cfg, demo_path)
+    mask_keys = list(mask_keys or [])
+    while len(mask_keys) < len(image_keys):
+        mask_keys.append("")
+    mask_keys = mask_keys[: len(image_keys)]
     active_masks = active_mask_keys(mask_keys)
 
     if init_states_override is None:

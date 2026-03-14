@@ -668,7 +668,7 @@ def main(cfg: TrainConfig) -> None:
                 model,
                 obs_keys,
                 image_keys,
-                mask_keys if active_mask_keys else None,
+                mask_keys,
                 demo_path,
                 action_dim,
                 rollout_state["image_shapes"],

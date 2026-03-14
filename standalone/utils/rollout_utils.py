@@ -361,16 +361,20 @@ def parse_mask_keys(mask_keys_raw: str, image_keys: Sequence[str]) -> List[str]:
     return mask_keys[: len(image_keys)]
 
 
-def active_mask_keys(mask_keys: Sequence[str]) -> List[str]:
+def active_mask_keys(mask_keys: Optional[Sequence[str]]) -> List[str]:
     """Return active non-empty mask keys."""
-    return [key for key in mask_keys if key]
+    return [key for key in (mask_keys or []) if key]
 
 
 def image_mask_items(
-    image_keys: Sequence[str], mask_keys: Sequence[str]
+    image_keys: Sequence[str], mask_keys: Optional[Sequence[str]]
 ) -> List[Tuple[str, str]]:
     """Return ordered `(image_key, mask_key)` pairs for active masks."""
-    return [(img_key, mask_key) for img_key, mask_key in zip(image_keys, mask_keys) if mask_key]
+    return [
+        (img_key, mask_key)
+        for img_key, mask_key in zip(image_keys, mask_keys or [])
+        if mask_key
+    ]
 
 
 def infer_camera_size(image_shapes: Mapping[str, Sequence[int]]) -> Optional[Tuple[int, int]]:
