@@ -195,7 +195,19 @@ def run_env_rollouts(
     if max_steps <= 0:
         raise ValueError("steps must be >= 1")
 
-    env_cls = SegmentationRenderEnv if active_masks else OffScreenRenderEnv
+    # Keep rollout rendering aligned with segmentation-enabled datasets even when
+    # the policy itself does not consume masks. In practice, the RGB frames
+    # produced by OffScreenRenderEnv and SegmentationRenderEnv can diverge for the
+    # same init state when camera_segmentations is active.
+    use_segmentation_env = bool(active_masks) or (
+        env_args.get("camera_segmentations", None) is not None
+    )
+    if use_segmentation_env and not active_masks:
+        print(
+            "[info] using SegmentationRenderEnv because camera_segmentations is enabled "
+            "in rollout env kwargs"
+        )
+    env_cls = SegmentationRenderEnv if use_segmentation_env else OffScreenRenderEnv
     if env_num == 1:
         env = env_cls(**env_args)
     else:
