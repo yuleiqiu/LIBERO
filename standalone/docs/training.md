@@ -128,7 +128,8 @@ Each run directory stores:
 - DP action slicing: when `policy.dp.action_horizon` (or `policy.dp.action_start_offset`)
   is set, the dataset pads action sequences and exposes `action_mask`. Training
   will enable `policy.dp.model.do_mask_loss_for_padding` automatically if needed,
-  and action normalization ignores masked padding.
+  and action normalization ignores masked padding. Padding uses edge-repeat
+  semantics for actions (repeat first/last valid action), not zero-padding.
 - Validation loss is logged every `training.val_every` epochs; only the loss is tracked
   (no best-val selection or extra val stats). `split_indices.json` records the
   episode-level split from `data.val_ratio` (with `train_ratio = 1 - val_ratio`) and is reused on resume.

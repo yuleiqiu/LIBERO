@@ -138,12 +138,15 @@ class HDF5SequenceDataset(Dataset):
         valid_len = actions.shape[0]
         pad_back = action_horizon - (pad_front + valid_len)
 
-        if pad_front > 0:
-            front = np.zeros((pad_front, base_action_dim), dtype=np.float32)
-            actions = np.concatenate([front, actions], axis=0)
-        if pad_back > 0:
-            back = np.zeros((pad_back, base_action_dim), dtype=np.float32)
-            actions = np.concatenate([actions, back], axis=0)
+        if valid_len > 0:
+            if pad_front > 0:
+                front = np.repeat(actions[[0]], pad_front, axis=0)
+                actions = np.concatenate([front, actions], axis=0)
+            if pad_back > 0:
+                back = np.repeat(actions[[-1]], pad_back, axis=0)
+                actions = np.concatenate([actions, back], axis=0)
+        else:
+            actions = np.zeros((action_horizon, base_action_dim), dtype=np.float32)
 
         action_mask = np.zeros((action_horizon,), dtype=np.float32)
         if valid_len > 0:

@@ -115,7 +115,8 @@ python standalone/train.py \
 - **Horizon constraint**: `horizon % (2 ** len(down_dims)) == 0`.
 - **Multi-camera consistency**: all `image_keys` shapes must match.
 - **Crop alignment**: training random crop, eval center crop; defaults are `num_crops=1`, `pos_enc=false`.
-- **action_mask**: used when `do_mask_loss_for_padding=true`.
+- **action_mask**: used when `do_mask_loss_for_padding=true`; padded action slots use
+  edge-repeat values from the nearest valid boundary action.
 - **Length relationship**: `horizon (generated length) >= n_action_steps (output chunk length) >= exec_horizon (executed length)`.
 
 ## 6. Terminology and Lengths (Clarification)
