@@ -24,18 +24,40 @@ TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 # Paths
 # -----------------------
 export REPO_DIR="${REPO_DIR:-$SCRATCH/work/LIBERO}"
-EXP_ROOT="${EXP_ROOT:-$REPO_DIR/dp/libero_single/alphabet_soup}"
+EXP_ROOT="${EXP_ROOT:-$REPO_DIR/standalone/standalone_runs/dp/libero_single/alphabet_soup}"
 
 # -----------------------
-# Checkpoint config
+# Checkpoint naming config
 # -----------------------
 RUN_ID="${RUN_ID:-run_000}"
 CKPT_NAME="${CKPT_NAME:-model_last.pt}"
 
-VARIANTS=(
-  no_mask_to2_tp128_ta100_seed300_bs64
-  with_mask_to2_tp128_ta100_seed300_bs64
+PAD_TAG_RAW="${PAD_TAG:-actedge}"
+PAD_TAG="${PAD_TAG_RAW//[^[:alnum:]_.-]/_}"
+
+if GIT_TAG_DEFAULT="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null)"; then
+  :
+else
+  GIT_TAG_DEFAULT="nogit"
+fi
+GIT_TAG_RAW="${GIT_TAG:-$GIT_TAG_DEFAULT}"
+GIT_TAG="${GIT_TAG_RAW//[^[:alnum:]_.-]/_}"
+
+SEED="${SEED:-300}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
+OBS_HORIZON="${OBS_HORIZON:-2}"
+MODEL_HORIZON="${MODEL_HORIZON:-128}"
+ACTION_CHUNK="${ACTION_CHUNK:-100}"
+
+MASK_VARIANTS=(
+  no_mask
+  with_mask
 )
+
+VARIANTS=()
+for MASK_VARIANT in "${MASK_VARIANTS[@]}"; do
+  VARIANTS+=("${MASK_VARIANT}_pad${PAD_TAG}_hash${GIT_TAG}_seed${SEED}_bs${BATCH_SIZE}_to${OBS_HORIZON}_tp${MODEL_HORIZON}_ta${ACTION_CHUNK}")
+done
 
 # -----------------------
 # Eval seeds
@@ -115,7 +137,9 @@ CKPT_STEM="${CKPT_NAME%.pt}"
 # -----------------------
 # Logs
 # -----------------------
-LOG_DIR="results/${JOB_ID}/${TASK_ID}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+LOG_ROOT="${LOG_ROOT:-${SUBMIT_DIR}/results}"
+LOG_DIR="${LOG_ROOT}/${JOB_ID}/${TASK_ID}"
 mkdir -p "$LOG_DIR"
 exec > "$LOG_DIR/slurm.out" 2> "$LOG_DIR/slurm.err"
 
@@ -151,6 +175,8 @@ BASE_VIDEO_DIR="${CKPT_DIR}/rollout_videos/${CKPT_STEM}/eval/eval_seed_${EVAL_SE
 echo "Running TASK_ID=${TASK_ID} | variant=${VARIANT} | eval_seed=${EVAL_SEED} | env=${ENV_KEY} | tag=${VIDEO_TAG}"
 echo "Checkpoint: ${CKPT}"
 echo "EXP_ROOT: ${EXP_ROOT}"
+echo "PAD_TAG: ${PAD_TAG}"
+echo "GIT_TAG: ${GIT_TAG}"
 
 python -m standalone.rollout_env \
   --ckpt="${CKPT}" \

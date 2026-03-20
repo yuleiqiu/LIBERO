@@ -56,10 +56,10 @@ class AdamWOptimizerConfig:
 @dataclass
 class SchedulerConfig:
     """Learning rate scheduler settings."""
-    name: str = "none"
-    warmup_steps: int = 0
+    name: Optional[str] = "none"
+    warmup_steps: Optional[int] = 0
     num_training_steps: Optional[int] = None
-    min_lr: float = 0.0
+    min_lr: Optional[float] = 0.0
 
 
 @dataclass
@@ -116,7 +116,15 @@ class DiffusionConfig:
     model: DiffusionModelConfig = field(default_factory=DiffusionModelConfig)
     normalizer: NormalizerConfig = field(default_factory=NormalizerConfig)
     optimizer: AdamWOptimizerConfig = field(default_factory=AdamWOptimizerConfig)
-    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    # Leave fields unset by default so DP inherits training.scheduler unless explicitly overridden.
+    scheduler: SchedulerConfig = field(
+        default_factory=lambda: SchedulerConfig(
+            name=None,
+            warmup_steps=None,
+            num_training_steps=None,
+            min_lr=None,
+        )
+    )
 
     def dp_config_dict(self):
         data = self.model.dp_config_dict()

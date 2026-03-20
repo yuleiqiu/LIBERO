@@ -21,9 +21,11 @@ ARRAY_JOB_ID="${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}"
 ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 
 # -----------------------
-# Log directory: <submit_dir>/<array_job_id>/<array_task_id>/
+# Log directory: <submit_dir>/results/<array_job_id>/<array_task_id>/
 # -----------------------
-LOG_DIR="$(pwd)/${ARRAY_JOB_ID}/${ARRAY_TASK_ID}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+LOG_ROOT="${LOG_ROOT:-${SUBMIT_DIR}/results}"
+LOG_DIR="${LOG_ROOT}/${ARRAY_JOB_ID}/${ARRAY_TASK_ID}"
 mkdir -p "$LOG_DIR"
 exec > "$LOG_DIR/slurm.out" 2> "$LOG_DIR/slurm.err"
 
@@ -121,6 +123,20 @@ if [[ "$MASK_KEYS_RAW" != "__NONE__" ]]; then
 fi
 
 # -----------------------
+# Experiment identity tags
+# -----------------------
+PAD_TAG_RAW="${PAD_TAG:-actedge}"
+PAD_TAG="${PAD_TAG_RAW//[^[:alnum:]_.-]/_}"
+
+if GIT_TAG_DEFAULT="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null)"; then
+  :
+else
+  GIT_TAG_DEFAULT="nogit"
+fi
+GIT_TAG_RAW="${GIT_TAG:-$GIT_TAG_DEFAULT}"
+GIT_TAG="${GIT_TAG_RAW//[^[:alnum:]_.-]/_}"
+
+# -----------------------
 # System-managed settings (machine/runtime)
 # -----------------------
 ROLLOUT_NUM_PROCS=6
@@ -128,7 +144,7 @@ if [[ -n "${SLURM_CPUS_PER_TASK:-}" && "$SLURM_CPUS_PER_TASK" -lt "$ROLLOUT_NUM_
   ROLLOUT_NUM_PROCS="$SLURM_CPUS_PER_TASK"
 fi
 
-RUN_TAG="${VARIANT}_to${OBS_HORIZON}_tp${MODEL_HORIZON}_ta${ACTION_CHUNK}_seed${SEED}_bs${BATCH_SIZE}"
+RUN_TAG="${VARIANT}_pad${PAD_TAG}_hash${GIT_TAG}_seed${SEED}_bs${BATCH_SIZE}_to${OBS_HORIZON}_tp${MODEL_HORIZON}_ta${ACTION_CHUNK}"
 SAVE_BASE_DIR="${EXP_ROOT}/${RUN_TAG}"
 mkdir -p "$SAVE_BASE_DIR"
 
@@ -138,10 +154,12 @@ mkdir -p "$WANDB_DIR" "$WANDB_CACHE_DIR"
 
 WANDB_GROUP_DEFAULT="${TASK_SLUG}_dp_mask_compare_${ARRAY_JOB_ID}"
 WANDB_GROUP="${WANDB_GROUP:-$WANDB_GROUP_DEFAULT}"
-WANDB_TAGS="${WANDB_TAGS:-suite:libero_single,task:${TASK_SLUG},policy:dp,exp:mask_compare,mask:${MASK_MODE},obs_horizon:${OBS_HORIZON},n_obs_steps:${N_OBS_STEPS},predict_horizon:${PREDICT_HORIZON},model_horizon:${MODEL_HORIZON},n_action_steps:${ACTION_CHUNK}}"
+WANDB_TAGS="${WANDB_TAGS:-suite:libero_single,task:${TASK_SLUG},policy:dp,exp:mask_compare,mask:${MASK_MODE},pad:${PAD_TAG},git:${GIT_TAG},obs_horizon:${OBS_HORIZON},n_obs_steps:${N_OBS_STEPS},predict_horizon:${PREDICT_HORIZON},model_horizon:${MODEL_HORIZON},n_action_steps:${ACTION_CHUNK}}"
 
 echo "Running array task ${ARRAY_TASK_ID}"
 echo "VARIANT=${VARIANT}"
+echo "PAD_TAG=${PAD_TAG}"
+echo "GIT_TAG=${GIT_TAG}"
 echo "RUN_TAG=${RUN_TAG}"
 echo "SAVE_BASE_DIR=${SAVE_BASE_DIR}"
 echo "MASK_KEYS=${MASK_KEYS:-<empty>}"
@@ -191,7 +209,7 @@ SYSTEM_ARGS=(
   --data.seed="${SEED}"
   --rollout.num_procs="${ROLLOUT_NUM_PROCS}"
   --paths.save_dir="${SAVE_BASE_DIR}"
-  --logging.experiment_name="dp_${TASK_SLUG}_${VARIANT}"
+  --logging.experiment_name="dp_${TASK_SLUG}_${VARIANT}_pad${PAD_TAG}_hash${GIT_TAG}_seed${SEED}_bs${BATCH_SIZE}_to${OBS_HORIZON}_tp${MODEL_HORIZON}_ta${ACTION_CHUNK}"
   --logging.wandb_group="${WANDB_GROUP}"
   --logging.wandb_tags="${WANDB_TAGS}"
 )
